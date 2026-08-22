@@ -1,0 +1,124 @@
+# dsh-automode bundle patch (v0.5.0)
+#
+# Inserts the plugin row + the auto-mode permission preset.
+# The preset appears in the permission picker next to read-only /
+# workspace-write / danger-full-access.
+
+- insert:
+    - id: auto-mode
+      name: 'dsh-automode'
+      config:
+        deny:
+          - exfiltrat
+          - 'curl\s+[^|]*\|\s*(?:ba)?sh'
+          - 'wget\s+[^|]*\|\s*(?:ba)?sh'
+          - authorized_keys
+          - 'AWS_SECRET|PRIVATE KEY|-----BEGIN'
+          - \.aws/credentials
+          - '(?:^|[\s;&|("\'])(?:trash|mv)\s+/(?:etc|usr|bin|sbin|var|System|Library|private/etc)(?:/|\s|$)'
+          - 'docker\s+(volume\s+rm|system\s+prune|container\s+prune)'
+          - '(?<![a-zA-Z0-9?.])\.ssh/'
+          - '(?<![a-zA-Z0-9?.])\.zshrc'
+          - '(?<![a-zA-Z0-9?.])\.bashrc'
+          - '(?<![a-zA-Z0-9?.])\.bash_profile'
+          - '(?<![a-zA-Z0-9?.])\.profile\b'
+          - '(?<![a-zA-Z0-9?.])\.claude/settings'
+          - '(?<![a-zA-Z0-9?.])\.dsh/settings\.yaml'
+          - 'id_rsa|id_ed25519'
+          - '(?<![a-zA-Z0-9?.])\.pem\b'
+          - '(?<![a-zA-Z0-9?.])\.env\b'
+          - credentials
+        allow:
+          - 'trash *'
+          - 'echo *'
+          - git status
+          - 'git status *'
+          - 'git log*'
+          - 'git diff*'
+          - 'git show*'
+          - 'wc *'
+          - 'head *'
+          - 'tail *'
+          - 'sort *'
+          - 'uniq *'
+          - 'date*'
+          - 'which *'
+          - 'ps *'
+          - 'df *'
+          - 'du *'
+          - 'mkdir *'
+          - 'ls*'
+          - 'pip show *'
+          - 'pip list *'
+          - 'npm view *'
+          - 'tasklist *'
+          - 'brew list *'
+          - 'brew info *'
+          - brew --prefix
+          - 'unzip -l *'
+          - 'tar xzf *'
+          - 'code *'
+        readOnlyTools:
+          - read
+          - glob
+          - grep
+          - list
+          - search
+        allowPaths:
+          - '~/OneDrive - The Hong Kong Polytechnic University/'
+          - '~/Library/CloudStorage/OneDrive-TheHongKongPolytechnicUniversity/Projects/GRF 2026/'
+          - '~/.agents/'
+          - '~/.bin/'
+          - '~/.claude/scripts/'
+          - '~/.claude/skills/'
+          - '/tmp/'
+        allowInsideWorkingDirectory: true
+        failClosed: true
+        preExecuteGate: true
+        timeoutMs: 45000
+        classifyContextChars: 6000
+        maxArgsChars: 4000
+        breakerConsecutive: 3
+        breakerTotal: 20
+        classifier:
+          provider: ''
+          model: ''
+          maxTranscriptMessages: 40
+          maxTokens: 2048
+          temperature: 0
+          reasoningLevel: low
+          askFallback: false
+        rules:
+          deny: ['$defaults']
+          allow: ['$defaults']
+          environment: ['$defaults']
+
+# Permission row restatement: the built-in presets plus auto-mode.
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+        name: 只读
+        description: 只能读，任何写入都需要审批。
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+        name: 请求批准
+        description: 工作区内可写；工作区外的操作请求人工审批。
+      model-approval:
+        sandbox: workspace-write
+        approval: ask
+        name: 帮我批准
+        description: 审批由独立的评审模型决定；拿不准或模型故障时转人工。
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+        name: 完全放开
+        description: 全放行，不弹审批。
+      auto-mode:
+        sandbox: workspace-write
+        approval: ask
+        name: Auto mode
+        description: 确定性规则 + 两阶段分类器自动决定；危险或故障时 fail-closed。
