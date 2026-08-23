@@ -17,6 +17,13 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ConfigType } from './config.js';
 import { VerdictCache } from './cache.js';
 import { Breaker } from './breaker.js';
+/**
+ * Injected at the moment the breaker trips so the model stops doing the
+ * "try at current level → hit a denied error → then escalate" round-trip
+ * and instead requests the sandbox escalation directly, surfacing the human
+ * approval window immediately.
+ */
+export declare const BREAKER_TRIPPED_HINT: string;
 export interface PreExecuteResult {
     kind: 'allow' | 'deny';
     reason?: string;

@@ -39,11 +39,10 @@ export const DEFAULT_DENY = [
   '(?<![a-zA-Z0-9?.])\\.bash_profile',
   '(?<![a-zA-Z0-9?.])\\.profile\\b',
   '(?<![a-zA-Z0-9?.])\\.claude/settings',
-  '(?<![a-zA-Z0-9?.])\\.dsh/settings\\.yaml',
   'id_rsa|id_ed25519',
   '(?<![a-zA-Z0-9?.])\\.pem\\b',
   '(?<![a-zA-Z0-9?.])\\.env\\b',
-  'credentials',
+  '(?<![a-zA-Z0-9])credentials\\b',
 ] as const;
 
 /** Zero-LLM allow patterns (prefix globs). */
@@ -186,6 +185,8 @@ export const Config = z.object({
     reasoningLevel: z.string().default('low'),
     /** When classifier returns "ask", fall back to human prompt. */
     askFallback: z.boolean().default(false),
+    /** How many recent direct user messages feed the intent block (CC-style). */
+    maxIntentMessages: z.number().default(6).min(1),
   }),
 
   // --- Prose rules (fed to classifier) ---

@@ -6,7 +6,7 @@
 
 - insert:
     - id: auto-mode
-      name: 'dsh-automode'
+      name: '@log.li/dsh-automode'
       config:
         deny:
           - exfiltrat
@@ -15,7 +15,7 @@
           - authorized_keys
           - 'AWS_SECRET|PRIVATE KEY|-----BEGIN'
           - \.aws/credentials
-          - '(?:^|[\s;&|("\'])(?:trash|mv)\s+/(?:etc|usr|bin|sbin|var|System|Library|private/etc)(?:/|\s|$)'
+          - '(?:^|[\s;&|("''])(?:trash|mv)\s+/(?:etc|usr|bin|sbin|var|System|Library|private/etc)(?:/|\s|$)'
           - 'docker\s+(volume\s+rm|system\s+prune|container\s+prune)'
           - '(?<![a-zA-Z0-9?.])\.ssh/'
           - '(?<![a-zA-Z0-9?.])\.zshrc'
@@ -23,11 +23,10 @@
           - '(?<![a-zA-Z0-9?.])\.bash_profile'
           - '(?<![a-zA-Z0-9?.])\.profile\b'
           - '(?<![a-zA-Z0-9?.])\.claude/settings'
-          - '(?<![a-zA-Z0-9?.])\.dsh/settings\.yaml'
           - 'id_rsa|id_ed25519'
           - '(?<![a-zA-Z0-9?.])\.pem\b'
           - '(?<![a-zA-Z0-9?.])\.env\b'
-          - credentials
+          - '(?<![a-zA-Z0-9])credentials\b'
         allow:
           - 'trash *'
           - 'echo *'
@@ -107,11 +106,6 @@
         approval: ask
         name: 请求批准
         description: 工作区内可写；工作区外的操作请求人工审批。
-      model-approval:
-        sandbox: workspace-write
-        approval: ask
-        name: 帮我批准
-        description: 审批由独立的评审模型决定；拿不准或模型故障时转人工。
       danger-full-access:
         sandbox: danger-full-access
         approval: never
@@ -122,3 +116,6 @@
         approval: ask
         name: Auto mode
         description: 确定性规则 + 两阶段分类器自动决定；危险或故障时 fail-closed。
+        # Inner glyph path (drawn inside the shared shield outline by the DSH
+        # permission picker); requires the dsh-permission-preset-icon patch.
+        icon: 'M9.15 3.4L5.85 8.55H7.95L7.05 12.6L10.45 7.25H8.25L9.15 3.4Z'

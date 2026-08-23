@@ -38,6 +38,100 @@ export interface ClassifyOptions {
   readonly maxTokens: number;
   /** Cancellation signal (the approval request's signal). */
   readonly signal?: AbortSignal;
+  /** Hard timeout (ms) applied to the classifier call; see effectiveSignal(). */
+  readonly timeoutMs?: number;
+  /** Optional adapter reasoning effort (low/medium/high); falls back if the route doesn't support it. */
+  readonly reasoningEffort?: string;
+  /** Optional logger for classifier root-cause diagnostics (route, errors, raw output). */
+  readonly logger?: { info: (m: string) => void; warn: (m: string) => void };
+}
+
+/**
+ * Combine a request cancellation signal with a hard timeout.
+ * Uses AbortSignal.any/timeout (Node >= 20.3). Falls back to just the
+ * request signal when no timeout is configured.
+ */
+function effectiveSignal(signal: AbortSignal | undefined, timeoutMs?: number): AbortSignal | undefined {
+  if (timeoutMs != null && timeoutMs > 0) {
+    const t = AbortSignal.timeout(timeoutMs);
+    return signal ? AbortSignal.any([signal, t]) : t;
+  }
+  return signal;
+}
+
+/** Token budget for the one-token fast filter. Reasoning models consume budget
+ * on chain-of-thought, so a tiny budget starves the answer and always degrades
+ * to the full classifier; give enough headroom for a low-effort reasoning pass. */
+const FAST_FILTER_MAX_TOKENS = 512;
+
+/** A single classifier stream invocation spec (provider/model/system/user + controls). */
+interface StreamSpec {
+  provider: string;
+  model: string;
+  system: string;
+  user: string;
+  temperature: number;
+  maxTokens: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  reasoningEffort?: string;
+  logger?: { info: (m: string) => void; warn: (m: string) => void };
+}
+
+/**
+ * Shared streaming helper: runs one classifier call and accumulates text.
+ *
+ * If a reasoning effort was requested but the route does not support it
+ * (dsh-llm throws `UNSUPPORTED_REASONING_EFFORT`), retry once without it so a
+ * non-reasoning model is never broken by the effort config.
+ *
+ * Returns `{ text, reasonKind }` on success, or `null` on a hard failure.
+ */
+async function streamTokens(
+  ctx: Context,
+  spec: StreamSpec,
+): Promise<{ text: string; reasonKind: string | null } | null> {
+  const attempts: Array<string | undefined> = spec.reasoningEffort
+    ? [spec.reasoningEffort, undefined]
+    : [undefined];
+  for (const effort of attempts) {
+    try {
+      let text = '';
+      let reasonKind: string | null = null;
+      for await (const chunk of ctx.llm.stream({
+        provider: spec.provider,
+        model: spec.model,
+        system: spec.system,
+        messages: [
+          createUserMessage({
+            content: [{ type: 'text', text: spec.user }],
+            source: { kind: 'plugin', plugin: 'auto-mode' },
+          }),
+        ],
+        temperature: spec.temperature,
+        maxTokens: spec.maxTokens,
+        signal: effectiveSignal(spec.signal, spec.timeoutMs),
+        ...(effort !== undefined ? { reasoningEffort: effort as any } : {}),
+      })) {
+        if (chunk.type === 'text-delta') text += chunk.text;
+        else if (chunk.type === 'finish') reasonKind = chunk.reason.kind;
+      }
+      return { text, reasonKind };
+    } catch (error) {
+      if (
+        (error as { code?: string } | null)?.code === 'UNSUPPORTED_REASONING_EFFORT' &&
+        effort !== undefined
+      ) {
+        continue; // route doesn't support the effort → retry without it
+      }
+      const code = (error as { code?: string } | null)?.code;
+      spec.logger?.warn(
+        `classifier stream failed (${spec.provider}/${spec.model}): ${String((error as { message?: string } | null)?.message ?? error)}${code ? ` [${code}]` : ''}`,
+      );
+      return null;
+    }
+  }
+  return null;
 }
 
 /** Render one content block into plain text. */
@@ -79,8 +173,40 @@ export function renderTranscript(
 }
 
 /**
- * Resolve the classifier route: explicit config wins, otherwise the agent's
- * own options, otherwise the session's current request header.
+ * Render the user's RECENT explicit instructions (CC-style intent).
+ *
+ * Unlike the full transcript, this keeps only the most recent `maxMessages`
+ * user-role messages, so the classifier can weigh what the user asked for
+ * when judging whether an action serves the current request. Standalone
+ * assistant/tool turns are dropped on purpose: repository text and tool
+ * output MUST NOT grant permission (only direct human messages can).
+ */
+export function renderUserIntent(
+  messages: readonly Message[],
+  maxMessages: number,
+): string {
+  const userMsgs: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && userMsgs.length < maxMessages; i--) {
+    const m = messages[i];
+    if (!m) continue; // noUncheckedIndexedAccess guard
+    if (m.role !== 'user') continue;
+    const text = m.content.map(renderBlock).filter(Boolean).join(' ');
+    if (text.trim()) userMsgs.unshift(`${m.role}: ${text}`);
+  }
+  return userMsgs.join('\n\n');
+}
+
+/** Truncate a rendered context block to a char budget (classifyContextChars). */
+export function truncateToChars(text: string, maxChars: number): string {
+  if (!text || maxChars <= 0) return text;
+  return text.length > maxChars ? text.slice(0, maxChars) + '\n…(truncated)' : text;
+}
+
+/**
+ * Resolve the classifier route: explicit config wins, otherwise the SESSION's
+ * current request header (the model the user is actually running), otherwise
+ * the agent's configured options. This lets the classifier follow the model the
+ * session uses rather than a stale/default one.
  */
 export function resolveRoute(
   agent: Agent,
@@ -89,8 +215,8 @@ export function resolveRoute(
 ): { provider: string; model: string } {
   const header = agent.session.requestHeader()?.config;
   const provider =
-    configuredProvider || agent.options.provider || header?.provider || '';
-  const model = configuredModel || agent.options.model || header?.model || '';
+    configuredProvider || header?.provider || agent.options.provider || '';
+  const model = configuredModel || header?.model || agent.options.model || '';
   return { provider, model };
 }
 
@@ -195,36 +321,33 @@ export async function fastFilter(
   provider: string,
   model: string,
   signal?: AbortSignal,
+  timeoutMs?: number,
+  reasoningEffort?: string,
+  logger?: { info: (m: string) => void; warn: (m: string) => void },
 ): Promise<boolean | null> {
-  let text = '';
-  try {
-    for await (const chunk of ctx.llm.stream({
-      provider,
-      model,
-      system:
-        'You are a safety filter. Reply with exactly one digit: 0 if the action is routine and safe, 1 if it needs careful review. Nothing else.',
-      messages: [
-        createUserMessage({
-          content: [{ type: 'text', text: actionSummary }],
-          source: { kind: 'plugin', plugin: 'auto-mode' },
-        }),
-      ],
-      temperature: 0,
-      maxTokens: 4,
-      signal,
-    })) {
-      if (chunk.type === 'text-delta') text += chunk.text;
-      if (chunk.type === 'finish') {
-        if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted')
-          return null;
-      }
-    }
-  } catch {
-    return null;
-  }
-  const digit = text.trim()[0];
-  if (digit === '0') return false; // safe
-  if (digit === '1') return true; // needs review
+  const res = await streamTokens(ctx, {
+    provider,
+    model,
+    system:
+      'You are a safety filter. Reply with exactly one digit: 0 if the action is routine and safe, 1 if it needs careful review. Nothing else.',
+    user: actionSummary,
+    temperature: 0,
+    maxTokens: FAST_FILTER_MAX_TOKENS,
+    signal,
+    timeoutMs,
+    reasoningEffort,
+    logger,
+  });
+  if (!res) return null;
+  if (res.reasonKind === 'error' || res.reasonKind === 'aborted') return null;
+  // Parse a standalone 0/1 digit (reasoning models may emit prose around it).
+  const m = res.text.match(/(^|\D)([01])(\D|$)/);
+  const d = m?.[2];
+  if (d === '0') return false; // safe
+  if (d === '1') return true; // needs review
+  logger?.warn(
+    `fastFilter no 0/1 digit (${provider}/${model}); raw=${JSON.stringify(res.text.slice(0, 300))} (length=${res.text.length}, reason=${res.reasonKind})`,
+  );
   return null; // malformed → caller decides
 }
 
@@ -236,37 +359,64 @@ export async function classify(
   ctx: Context,
   options: ClassifyOptions,
 ): Promise<Verdict | null> {
-  let text = '';
-  try {
-    for await (const chunk of ctx.llm.stream({
-      provider: options.provider,
-      model: options.model,
-      system: options.system,
-      messages: [
-        createUserMessage({
-          content: [{ type: 'text', text: options.user }],
-          source: { kind: 'plugin', plugin: 'auto-mode' },
-        }),
-      ],
-      temperature: options.temperature,
-      maxTokens: options.maxTokens,
-      signal: options.signal,
-    })) {
-      if (chunk.type === 'text-delta') {
-        text += chunk.text;
-      } else if (chunk.type === 'finish') {
-        if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') {
-          return null;
-        }
-        if (chunk.reason.kind === 'max-tokens') {
-          // The reply may be truncated mid-JSON; only a fully parsed verdict
-          // is acceptable, otherwise treat as no verdict.
-          return parseVerdict(text);
-        }
-      }
-    }
-  } catch {
-    return null;
+  const res = await streamTokens(ctx, {
+    provider: options.provider,
+    model: options.model,
+    system: options.system,
+    user: options.user,
+    temperature: options.temperature,
+    maxTokens: options.maxTokens,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+    reasoningEffort: options.reasoningEffort,
+    logger: options.logger,
+  });
+  if (!res) return null;
+  if (res.reasonKind === 'error' || res.reasonKind === 'aborted') return null;
+  // max-tokens / normal finish → parse whatever text was produced.
+  const verdict = parseVerdict(res.text);
+  if (!verdict) {
+    options.logger?.warn(
+      `classifier no parseable verdict (${options.provider}/${options.model}); raw=${JSON.stringify(res.text.slice(0, 400))}`,
+    );
   }
-  return parseVerdict(text);
+  return verdict;
+}
+
+/**
+ * Two-stage classification (spec decision chain, and README "two-stage
+ * classifier"): run the cheap one-token fast filter first; only flagged or
+ * failed-filter actions proceed to the full structured review.
+ *
+ * - fastFilter returns `false`  → routine/safe → ALLOW (no full review).
+ * - fastFilter returns `true`   → needs review → full classify().
+ * - fastFilter returns `null`   → filter failed → be conservative: run the
+ *   full classify() (fail-closed upstream decides what a null verdict means).
+ *
+ * This is what wires the previously-dead `fastFilter` (Bug 1) into both the
+ * approval waterfall and the pre-execute escalation pre-screen.
+ */
+export async function classifyTwoStage(
+  ctx: Context,
+  options: ClassifyOptions,
+  actionSummary: string,
+): Promise<Verdict | null> {
+  options.logger?.info(
+    `classifier route: ${options.provider}/${options.model} (reasoningEffort=${options.reasoningEffort ?? 'default'})`,
+  );
+  const needsReview = await fastFilter(
+    ctx,
+    actionSummary,
+    options.provider,
+    options.model,
+    options.signal,
+    options.timeoutMs,
+    options.reasoningEffort,
+    options.logger,
+  );
+  if (needsReview === false) {
+    return { decision: 'allow', reason: 'one-token filter: routine/safe action' };
+  }
+  // true (needs review) or null (filter failed) → full structured review.
+  return classify(ctx, options);
 }

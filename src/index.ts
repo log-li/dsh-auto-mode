@@ -34,18 +34,16 @@ import { classifyBand, compileRegex, compileGlob, bashCommandOf } from './bands.
 import { findAllowRule, findDenyRule, isAllowlisted } from './rules.js';
 import { buildSystemPrompt, buildUserMessage, promptInputOf } from './prompt.js';
 import {
-  classify,
-  fastFilter,
-  parseVerdict,
+  classifyTwoStage,
   renderTranscript,
+  renderUserIntent,
   resolveRoute,
+  truncateToChars,
 } from './classifier.js';
 import { VerdictCache } from './cache.js';
 import { Breaker } from './breaker.js';
-import { registerPreExecute } from './pre-execute.js';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { registerPreExecute, BREAKER_TRIPPED_HINT } from './pre-execute.js';
+import { appendDecision } from './log.js';
 
 export const name = 'dsh-automode';
 export { Config };
@@ -164,7 +162,9 @@ export async function askHumanForDecision(ctx: Context, req: ApprovalRequest): P
 // ---- Main decision chain ----
 
 function denialText(category: string, reason: string): string {
-  return `dsh-auto-mode denied this action (${category}): ${reason}. Find a safer alternative approach and retry.`;
+  return `dsh-automode denied this action (${category}): ${reason}. ` +
+    'Try a safer alternative. If there is NO safer alternative, STOP retrying and ask the user for explicit permission ' +
+    '(a denied action will keep failing; only explicit user approval lets a later attempt pass).';
 }
 
 function classifierUnavailableText(detail: string, toolName: string): string {
@@ -175,7 +175,7 @@ function classifierUnavailableText(detail: string, toolName: string): string {
   else if (/overload|529/.test(m)) cat = ' (overloaded)';
   else if (/server error|\b5\d\d\b/.test(m)) cat = ' (server error)';
   else if (/connect|network|socket|fetch failed|econn/.test(m)) cat = ' (connection failed)';
-  return `dsh-auto-mode: the safety classifier is temporarily unavailable${cat}, so auto mode cannot determine the safety of ${toolName} right now. Wait a moment and then try this action again. (detail: ${detail})`;
+  return `dsh-automode: the safety classifier is temporarily unavailable${cat}, so auto mode cannot determine the safety of ${toolName} right now. Wait a moment and then try this action again. (detail: ${detail})`;
 }
 
 async function decideAuto(
@@ -222,7 +222,7 @@ async function decideAuto(
   }
 
   // 5. Cache hit (pre-execute already classified)
-  const sig = VerdictCache.sig(toolName, reason ?? '', args);
+  const sig = VerdictCache.sig(toolName, reason ?? '', args, config.maxArgsChars);
   const sid = String(agent.session.id ?? '?');
   const cached = cache.get(sid, sig);
   if (cached === 'ALLOW') {
@@ -248,20 +248,32 @@ async function decideAuto(
   }
 
   const environmentFacts = expandDefaults(config.rules.environment, 'environment');
-  const input = promptInputOf(req, softAllowRules, softDenyRules, environmentFacts);
-  const transcript = renderTranscript(agent.session.deriveMessages(), config.classifier.maxTranscriptMessages);
+  const derived = agent.session.deriveMessages();
+  const transcript = truncateToChars(
+    renderTranscript(derived, config.classifier.maxTranscriptMessages),
+    config.classifyContextChars,
+  );
+  const userIntent = renderUserIntent(derived, config.classifier.maxIntentMessages);
+  const input = promptInputOf({ toolName, reason, userIntent }, softAllowRules, softDenyRules, environmentFacts);
 
   logger.info(`classifying ${toolName}${reason ? ` (${reason})` : ''} via ${route.provider}/${route.model}`);
 
-  const verdict = await classify(ctx, {
-    system: buildSystemPrompt(input),
-    user: buildUserMessage(input, transcript),
-    provider: route.provider,
-    model: route.model,
-    temperature: config.classifier.temperature,
-    maxTokens: config.classifier.maxTokens,
-    signal,
-  });
+  const verdict = await classifyTwoStage(
+    ctx,
+    {
+      system: buildSystemPrompt(input),
+      user: buildUserMessage(input, transcript),
+      provider: route.provider,
+      model: route.model,
+      temperature: config.classifier.temperature,
+      maxTokens: config.classifier.maxTokens,
+      signal,
+      timeoutMs: config.timeoutMs,
+      reasoningEffort: config.classifier.reasoningLevel,
+      logger,
+    },
+    `${toolName}${reason ? ` (${reason})` : ''}`,
+  );
 
   if (verdict) {
     logger.info(`classifier verdict: ${verdict.decision} — ${verdict.reason}`);
@@ -277,6 +289,19 @@ async function decideAuto(
         const justTripped = breaker.countDeny(sid, config.breakerConsecutive, config.breakerTotal);
         if (justTripped) {
           logger.warn(`breaker tripped for session ${sid}`);
+          const b = breaker.get(sid);
+          appendDecision({
+            event: 'breaker',
+            action: 'tripped',
+            tool: toolName,
+            sessionId: sid,
+            detail: `consecutive=${b.consecutive} total=${b.total}`,
+          });
+          // Tell the model to escalate directly (skip try→error→escalate).
+          agent.inject(createUserMessage({
+            content: [{ type: 'text', text: BREAKER_TRIPPED_HINT }],
+            source: { kind: 'plugin', plugin: 'auto-mode' },
+          }));
         }
         // Inject explanation so the model knows it was the reviewer, not a human
         agent.inject(createUserMessage({
@@ -296,6 +321,8 @@ async function decideAuto(
           logger.info(`classifier asked for human confirmation — treating as rejection (askFallback=false)`);
           return 'rejected';
         }
+        // A human is now engaged — the consecutive classifier-deny streak is over.
+        breaker.resetConsecutive(sid);
         const decision = await askHumanForDecision(ctx, req);
         switch (decision.kind) {
           case 'allow': return 'allowed-once';
@@ -319,16 +346,6 @@ async function decideAuto(
   return config.failClosed ? 'rejected' : next();
 }
 
-// ---- Persistent JSONL logging ----
-
-function appendDecision(entry: Record<string, unknown>): void {
-  try {
-    const logDir = join(homedir(), '.dsh', 'auto-mode');
-    mkdirSync(logDir, { recursive: true });
-    appendFileSync(join(logDir, 'decisions.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
-  } catch { /* best effort */ }
-}
-
 // ---- Apply ----
 
 export function apply(ctx: Context, rawConfig: unknown): void {
@@ -347,12 +364,25 @@ export function apply(ctx: Context, rawConfig: unknown): void {
     if (!isAuto(req.agent.session)) return next();
     const sid = String(req.agent.session.id ?? '?');
 
-    // Breaker tripped → delegate to human
+    // Breaker tripped → delegate to human. A human allow OR reject is an
+    // authoritative, loop-breaking decision that re-arms auto mode and resets
+    // the classifier-denial counters. (cancelled / unavailable = no real human
+    // decision → keep the breaker tripped.)
     if (breaker.isTripped(sid)) {
-      const ans = next();
-      // Note: we can't await here in the sync handler; the breaker resume
-      // happens when the human approves via the UI. This is a simplification.
-      return ans;
+      return next().then((outcome) => {
+        if (outcome === 'allowed-once' || outcome === 'rejected') {
+          breaker.resume(sid);
+          const extra = outcome === 'allowed-once' ? 'human allowed' : 'human rejected';
+          appendDecision({
+            event: 'resume',
+            tool: req.toolName,
+            sessionId: sid,
+            detail: `${extra} → breaker reset`,
+          });
+          logger.info(`breaker reset after ${extra} for session ${sid}`);
+        }
+        return outcome;
+      });
     }
 
     return decideAuto(ctx, config, req, next, cache, breaker, logger).then((outcome) => {
@@ -363,15 +393,6 @@ export function apply(ctx: Context, rawConfig: unknown): void {
         sessionId: sid,
         reason: req.reason,
       });
-
-      // Breaker resume on human approval
-      if (outcome === ('allowed-once' as ApprovalOutcome) || outcome === ('always' as ApprovalOutcome)) {
-        if (breaker.isTripped(sid)) {
-          breaker.resume(sid);
-          appendDecision({ event: 'resume', tool: req.toolName, sessionId: sid });
-        }
-      }
-
       return outcome;
     });
   }, { prepend: true });

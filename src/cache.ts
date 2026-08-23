@@ -20,13 +20,13 @@ export class VerdictCache {
   private store = new Map<string, Map<string, CachedVerdict>>();
 
   /** Build a stable signature for a classifier call. */
-  static sig(toolName: string, reason: string, args: unknown): string {
+  static sig(toolName: string, reason: string, args: unknown, maxChars = 200): string {
     const cmd =
       (typeof args === 'object' && args !== null && typeof (args as Record<string, unknown>).command === 'string'
         ? ((args as Record<string, unknown>).command as string)
         : '') ||
       String(reason ?? '');
-    return `${toolName}|${cmd.slice(0, 200).toLowerCase()}`;
+    return `${toolName}|${cmd.slice(0, maxChars).toLowerCase()}`;
   }
 
   get(sessionId: string, sig: string): 'ALLOW' | 'DENY' | null {

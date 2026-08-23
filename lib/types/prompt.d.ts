@@ -4,6 +4,8 @@ export interface PromptInput {
     readonly allowRules: readonly string[];
     readonly denyRules: readonly string[];
     readonly environmentFacts: readonly string[];
+    /** The user's most recent explicit instructions (CC-style intent). */
+    readonly userIntent?: string;
 }
 /**
  * Build the system prompt: safety monitor role + operator rules + decision
@@ -18,4 +20,5 @@ export declare function buildUserMessage(input: PromptInput, transcript: string)
 export declare function promptInputOf(req: {
     toolName: string;
     reason?: string;
+    userIntent?: string;
 }, allowRules: readonly string[], denyRules: readonly string[], environmentFacts: readonly string[]): PromptInput;

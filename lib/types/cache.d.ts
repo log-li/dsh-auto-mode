@@ -14,7 +14,7 @@ export interface CachedVerdict {
 export declare class VerdictCache {
     private store;
     /** Build a stable signature for a classifier call. */
-    static sig(toolName: string, reason: string, args: unknown): string;
+    static sig(toolName: string, reason: string, args: unknown, maxChars?: number): string;
     get(sessionId: string, sig: string): 'ALLOW' | 'DENY' | null;
     put(sessionId: string, sig: string, decision: 'ALLOW' | 'DENY' | null): void;
 }

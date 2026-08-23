@@ -21,7 +21,7 @@ function wildcardToRegExp(pattern: string): RegExp {
 }
 
 /** Whether one pattern matches one text. */
-function patternMatches(pattern: string, text: string): boolean {
+export function patternMatches(pattern: string, text: string): boolean {
   if (pattern.includes('*') || pattern.includes('?')) {
     return wildcardToRegExp(pattern).test(text);
   }

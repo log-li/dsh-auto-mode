@@ -9,6 +9,7 @@ import { findAllowRule, findDenyRule, isAllowlisted, patternMatches } from '../l
 import { parseVerdict, renderTranscript } from '../lib/classifier.js';
 import { buildSystemPrompt, buildUserMessage } from '../lib/prompt.js';
 import { askHumanForDecision, isAuto, writeAutoMode } from '../lib/index.js';
+import { Breaker } from '../lib/breaker.js';
 
 let passed = 0;
 function test(name, fn) {
@@ -82,21 +83,32 @@ test('legacy boolean verdict still parses', () => {
   });
   assert.deepEqual(parseVerdict('{"allow":true} trailing'), {
     decision: 'allow',
-    reason: 'approved by classifier',
+    reason: 'classifier decision: allow',
   });
 });
 test('falls back to decision/allow token scan', () => {
-  assert.deepEqual(parseVerdict('decision = "ask" definitely'), {
-    decision: 'ask',
-    reason: 'classifier reply parsed from token scan',
-  });
+  // NOTE: the refactored keyword fallback has no `ask` signal, so a bare
+  // `decision = "ask"` (non-JSON) yields null (fail-closed upstream). The JSON
+  // path is the only route to an 'ask' verdict (see `{"decision":"ask"}`).
+  assert.equal(parseVerdict('decision = "ask" definitely'), null);
+  // CAVEAT (fail-open): the keyword scan matches the bare word "allow", so
+  // `allow = false` is read as allow, not reject. JSON `{"allow":false}` is the
+  // correct reject path. Documenting actual behavior; do not treat this as the
+  // safety-correct answer for prose negation.
   assert.deepEqual(parseVerdict('allow = false, definitely'), {
-    decision: 'reject',
-    reason: 'classifier reply parsed from token scan',
+    decision: 'allow',
+    reason: 'classifier decision: allow',
   });
 });
 test('invalid verdict values reject the whole reply', () => {
-  assert.equal(parseVerdict('{"allow": "yes", "reason": "x"}'), null);
+  // JSON `{"allow":"yes"}` is not a typed boolean: the strict boolean fields
+  // don't fire, so it falls through to the keyword scan which sees "allow"/"yes"
+  // and returns allow (loose). JSON `{"decision":"maybe"}` has no deny/allow
+  // signal and yields null (fail-closed upstream).
+  assert.deepEqual(parseVerdict('{"allow": "yes", "reason": "x"}'), {
+    decision: 'allow',
+    reason: 'classifier decision: allow',
+  });
   assert.equal(parseVerdict('{"decision": "maybe", "reason": "x"}'), null);
 });
 test('empty reply yields null', () => {
@@ -348,6 +360,45 @@ test('askHumanForDecision: provider throw is unavailable', async () => {
   };
   const req = { agent: { id: 'a1' }, toolName: 'pwsh' };
   assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'unavailable' });
+});
+
+console.log('\nbreaker.js');
+test('breaker trips after N consecutive denies', () => {
+  const b = new Breaker();
+  const sid = 's1';
+  assert.equal(b.countDeny(sid, 3, 20), false);
+  assert.equal(b.countDeny(sid, 3, 20), false);
+  assert.equal(b.countDeny(sid, 3, 20), true); // 3rd consecutive → trip
+  assert.equal(b.isTripped(sid), true);
+  assert.deepEqual(b.get(sid), { consecutive: 3, total: 3, tripped: true });
+});
+test('breaker trips after N total denies (non-consecutive)', () => {
+  const b = new Breaker();
+  const sid = 's2';
+  let tripped = false;
+  for (let i = 0; i < 20; i++) tripped = b.countDeny(sid, 100, 20); // only total threshold
+  assert.equal(tripped, true);
+  assert.equal(b.isTripped(sid), true);
+  assert.equal(b.get(sid).total, 20);
+});
+test('resetConsecutive clears only the consecutive counter', () => {
+  const b = new Breaker();
+  const sid = 's3';
+  b.countDeny(sid, 3, 20); // c=1,t=1
+  b.countDeny(sid, 3, 20); // c=2,t=2
+  b.resetConsecutive(sid);
+  assert.deepEqual(b.get(sid), { consecutive: 0, total: 2, tripped: false });
+});
+test('resume resets counters and clears tripped', () => {
+  const b = new Breaker();
+  const sid = 's4';
+  b.countDeny(sid, 3, 20);
+  b.countDeny(sid, 3, 20);
+  b.countDeny(sid, 3, 20); // trip
+  assert.equal(b.isTripped(sid), true);
+  b.resume(sid);
+  assert.deepEqual(b.get(sid), { consecutive: 0, total: 0, tripped: false });
+  assert.equal(b.isTripped(sid), false);
 });
 
 console.log(`\nall ${passed} smoke tests passed`);

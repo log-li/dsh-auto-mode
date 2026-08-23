@@ -35,6 +35,15 @@ export interface ClassifyOptions {
     readonly maxTokens: number;
     /** Cancellation signal (the approval request's signal). */
     readonly signal?: AbortSignal;
+    /** Hard timeout (ms) applied to the classifier call; see effectiveSignal(). */
+    readonly timeoutMs?: number;
+    /** Optional adapter reasoning effort (low/medium/high); falls back if the route doesn't support it. */
+    readonly reasoningEffort?: string;
+    /** Optional logger for classifier root-cause diagnostics (route, errors, raw output). */
+    readonly logger?: {
+        info: (m: string) => void;
+        warn: (m: string) => void;
+    };
 }
 /**
  * Render a transcript as classifier input: the trailing `maxMessages`
@@ -42,8 +51,22 @@ export interface ClassifyOptions {
  */
 export declare function renderTranscript(messages: readonly Message[], maxMessages: number): string;
 /**
- * Resolve the classifier route: explicit config wins, otherwise the agent's
- * own options, otherwise the session's current request header.
+ * Render the user's RECENT explicit instructions (CC-style intent).
+ *
+ * Unlike the full transcript, this keeps only the most recent `maxMessages`
+ * user-role messages, so the classifier can weigh what the user asked for
+ * when judging whether an action serves the current request. Standalone
+ * assistant/tool turns are dropped on purpose: repository text and tool
+ * output MUST NOT grant permission (only direct human messages can).
+ */
+export declare function renderUserIntent(messages: readonly Message[], maxMessages: number): string;
+/** Truncate a rendered context block to a char budget (classifyContextChars). */
+export declare function truncateToChars(text: string, maxChars: number): string;
+/**
+ * Resolve the classifier route: explicit config wins, otherwise the SESSION's
+ * current request header (the model the user is actually running), otherwise
+ * the agent's configured options. This lets the classifier follow the model the
+ * session uses rather than a stale/default one.
  */
 export declare function resolveRoute(agent: Agent, configuredProvider: string, configuredModel: string): {
     provider: string;
@@ -72,9 +95,26 @@ export declare function parseVerdict(reply: string): Verdict | null;
  *
  * Returns true if the action needs review, false if safe, null on failure.
  */
-export declare function fastFilter(ctx: Context, actionSummary: string, provider: string, model: string, signal?: AbortSignal): Promise<boolean | null>;
+export declare function fastFilter(ctx: Context, actionSummary: string, provider: string, model: string, signal?: AbortSignal, timeoutMs?: number, reasoningEffort?: string, logger?: {
+    info: (m: string) => void;
+    warn: (m: string) => void;
+}): Promise<boolean | null>;
 /**
  * Run one classifier call. Returns the verdict, or `null` when the call
  * failed, was aborted, was truncated, or produced an unparsable reply.
  */
 export declare function classify(ctx: Context, options: ClassifyOptions): Promise<Verdict | null>;
+/**
+ * Two-stage classification (spec decision chain, and README "two-stage
+ * classifier"): run the cheap one-token fast filter first; only flagged or
+ * failed-filter actions proceed to the full structured review.
+ *
+ * - fastFilter returns `false`  → routine/safe → ALLOW (no full review).
+ * - fastFilter returns `true`   → needs review → full classify().
+ * - fastFilter returns `null`   → filter failed → be conservative: run the
+ *   full classify() (fail-closed upstream decides what a null verdict means).
+ *
+ * This is what wires the previously-dead `fastFilter` (Bug 1) into both the
+ * approval waterfall and the pre-execute escalation pre-screen.
+ */
+export declare function classifyTwoStage(ctx: Context, options: ClassifyOptions, actionSummary: string): Promise<Verdict | null>;
