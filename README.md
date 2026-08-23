@@ -11,6 +11,8 @@ This is a guardrail plugin. It intercepts agent tool calls before execution and 
 
 It is not a sandbox. The plugin runs in the DSH process, and a determined malicious plugin can do anything your user account can do. Use this to reduce unsafe autonomous tool use, not as an OS security boundary.
 
+![Auto mode in the permission picker](docs/auto-mode-icon.png)
+
 ## Install
 
 ```bash
@@ -159,8 +161,6 @@ Configuration goes in your profile's `cordis.patch.yml`. Everything has defaults
 | `breakerTotal` | `20` | Total classifier DENY to trip the breaker. |
 
 ### Permission preset icon
-
-![Auto mode in the permission picker](docs/auto-mode-icon.png)
 
 The `auto-mode` permission preset shows a bolt glyph in the permission picker. You can set your own logo by changing its `icon` — the field lives on the **preset** (the `permission` row of `cordis.patch.yml`, not `auto-mode`'s own config) and is an SVG path drawn inside the shared shield outline:
 

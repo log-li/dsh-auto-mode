@@ -11,6 +11,8 @@
 
 它**不是一个沙箱**。插件运行在 DSH 进程内，一个蓄意恶意的插件可以做你用户账户能做的任何事。用它来降低不安全的自主工具使用，而不是作为 OS 安全边界。
 
+![权限选择器中的 Auto mode](docs/auto-mode-icon.png)
+
 ## 安装
 
 ```bash
@@ -160,8 +162,6 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `breakerTotal` | `20` | 总分类器 DENY 触发熔断。 |
 
 ### 权限预设图标
-
-![权限选择器中的 Auto mode](docs/auto-mode-icon.png)
 
 `auto-mode` 权限预设会在权限选择器里显示一个 ⚡ 图标。你可以通过改它的 `icon` 设置自己的 logo——该字段位于**预设**（`cordis.patch.yml` 的 `permission` 行，不是 `auto-mode` 自身配置），是一个画在共享盾牌轮廓内的 SVG 路径：
 

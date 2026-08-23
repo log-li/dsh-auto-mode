@@ -142,10 +142,12 @@ export function registerPreExecute(
   const environmentFacts = expandDefaults(config.rules.environment, 'environment');
 
   ctx.on('tools/pre-execute' as any, async (exec: any, next: () => Promise<any>) => {
+    let toolName = '';
+    let sid = '';
     try {
       if (!exec || typeof exec.name !== 'string') return next();
 
-      const toolName: string = exec.name;
+      toolName = exec.name;
       const session = exec.agent?.session;
       if (!session) return next();
 
@@ -157,7 +159,7 @@ export function registerPreExecute(
         return next();
       }
 
-      const sid = String(session.id ?? '?');
+      sid = String(session.id ?? '?');
       const commandText = bashCommandOf(exec.arguments);
 
       // 1. Read-only tools → allow (unless deny matched)
@@ -249,6 +251,15 @@ export function registerPreExecute(
 
       // 5. Escalation intent OR out-of-workspace file op → classifier pre-screen.
       const isOutOfTreeFileOp = isFileToolCall && targetPaths.length > 0 && !inTrusted;
+      // Diagnose why a file op is (or isn't) classified: record the gate state.
+      if (isFileToolCall) {
+        appendDecision({
+          event: 'pre-execute-fileop',
+          tool: toolName,
+          sessionId: sid,
+          detail: `esc=${isEscalation} targets=${JSON.stringify(targetPaths)} inTree=${inTrusted} outOfTree=${isOutOfTreeFileOp} breaker=${breaker.isTripped(sid)} cwd=${session.header?.cwd ?? '?'}`,
+        });
+      }
       if ((isEscalation || isOutOfTreeFileOp) && !breaker.isTripped(sid)) {
         const escReason = isEscalation
           ? `escalate sandbox to ${perm}: ${String(exec.arguments?.justification ?? commandText ?? toolName)}`
@@ -375,7 +386,15 @@ export function registerPreExecute(
         }
       }
     } catch (error) {
-      logger.warn(`pre-execute error (fail-open): ${String((error as any)?.message ?? error)}`);
+      const msg = String((error as any)?.message ?? error);
+      const stack = String((error as any)?.stack ?? '');
+      logger.warn(`pre-execute error (fail-open): ${msg}`);
+      appendDecision({
+        event: 'pre-execute-fail-open',
+        tool: toolName,
+        sessionId: sid,
+        detail: `${msg}${stack ? `\n${stack.slice(0, 500)}` : ''}`,
+      });
     }
     return next();
   }, { prepend: true });

@@ -103,4 +103,5 @@ src/
 - **现象**：写工作区内部路径（如 `~/.dsh/patches/...`）也会被 pre-execute 分类器拦截（`pre-execute-deny`），尽管 `session.cwd` 记录为 `/Users/logan/.dsh`。
 - **根因**：pre-execute 门用的是 `session.cwd`，但 DSH `Session` **没有 `cwd` 访问器**——cwd 在 `session.header.cwd`（`SessionHeader`）。`session.cwd` 恒为 `undefined` → `trustRoots` 永远不会把会话工作区加入 trust roots → `allowInsideWorkingDirectory` 从不把工作区内文件操作当作 in-tree → 全被送进分类器。
 - **修复**：`src/pre-execute.ts` 将 `trustRoots(config.allowPaths, session.cwd)` 改为 `session.header?.cwd`。
+- **🔎 待诊断——越区写入偶发被 fail-open 放行**：某次 E2E 中，写 `~/Documents`（越区）得到裸 sandbox 拒绝，而非分类器裁决（熔断器未跳闸），疑似分类器分支抛错被 catch 兜底 fail-open，或 `collectPaths` 未识别为越区。**已加诊断**：pre-execute 门新增 `pre-execute-fileop`（记录 `esc/targets/inTree/outOfTree/breaker/cwd`）与 `pre-execute-fail-open`（记录错误 message+stack）到 decisions.jsonl，用于下次 auto 模式复现时定位根因。**防御**：`resolveRoute` 改用 `agent.options?.provider/model`，避免 `agent.options` 缺失时抛错导致 fail-open。
 

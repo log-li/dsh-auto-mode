@@ -215,8 +215,8 @@ export function resolveRoute(
 ): { provider: string; model: string } {
   const header = agent.session.requestHeader()?.config;
   const provider =
-    configuredProvider || header?.provider || agent.options.provider || '';
-  const model = configuredModel || header?.model || agent.options.model || '';
+    configuredProvider || header?.provider || agent.options?.provider || '';
+  const model = configuredModel || header?.model || agent.options?.model || '';
   return { provider, model };
 }
 
