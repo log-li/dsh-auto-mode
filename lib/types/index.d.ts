@@ -1,5 +1,5 @@
 /**
- * dsh-automode — CC-style auto mode for DeepSeek Harness (v0.5.0).
+ * dsh-automode — CC-style auto mode for DeepSeek Harness (v0.6.0).
  *
  * Merges dsh-auto-mode v0.4.1 (deterministic bands, pre-execute gate,
  * robust parser, circuit breaker, verdict cache) with Nuo-cl/dsh-auto-mode

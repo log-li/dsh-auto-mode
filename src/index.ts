@@ -1,5 +1,5 @@
 /**
- * dsh-automode — CC-style auto mode for DeepSeek Harness (v0.5.0).
+ * dsh-automode — CC-style auto mode for DeepSeek Harness (v0.6.0).
  *
  * Merges dsh-auto-mode v0.4.1 (deterministic bands, pre-execute gate,
  * robust parser, circuit breaker, verdict cache) with Nuo-cl/dsh-auto-mode
@@ -442,6 +442,6 @@ export function apply(ctx: Context, rawConfig: unknown): void {
   });
 
   // --- 5. Boot log ---
-  appendDecision({ event: 'boot', tool: '-', detail: `dsh-automode v0.5.0 active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})` });
-  logger.info(`dsh-automode v0.5.0 active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})`);
+  appendDecision({ event: 'boot', tool: '-', detail: `dsh-automode v0.6.0 active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})` });
+  logger.info(`dsh-automode v0.6.0 active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})`);
 }
