@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "dsh-automode Pipeline",
+    "quality_profile": "showcase",
+    "visual_preset": "signal-flow",
+    "output": "docs/auto-mode-flow.html",
+    "viewBox": [780, 1000]
+  },
+  "lanes": [
+    { "id": "call", "label": "Agent Runtime" },
+    { "id": "gate", "label": "Pre-execute Gate" },
+    { "id": "waterfall", "label": "Approval Waterfall" },
+    { "id": "safety", "label": "Breaker & Human Fallback", "variant": "exception" },
+    { "id": "exec", "label": "Execution Path" }
+  ],
+  "phases": [
+    { "id": "intercept", "label": "Intercept", "fromCol": 0, "toCol": 1 },
+    { "id": "decide", "label": "Decide", "fromCol": 2, "toCol": 3 },
+    { "id": "outcome", "label": "Execute", "fromCol": 4, "toCol": 5 }
+  ],
+  "groups": [
+    { "id": "wf_pipeline", "label": "LLM verdict pipeline", "lane": "waterfall", "fromCol": 2, "toCol": 4, "variant": "emphasis" }
+  ],
+  "mainPath": ["toolcall", "gate", "detallow", "execute"],
+  "nodes": [
+    { "id": "toolcall", "lane": "call", "col": 0, "type": "messagebus", "width": 92, "label": "Tool Call", "sublabel": "pre-execution" },
+    { "id": "gate", "lane": "gate", "col": 1, "type": "security", "width": 124, "height": 72, "label": "Pre-execute Gate", "sublabel": "deterministic", "tag": "all tools" },
+    { "id": "softrules", "lane": "waterfall", "col": 2, "type": "security", "width": 116, "height": 72, "label": "Soft Rules", "sublabel": "prose · cache" },
+    { "id": "classifier", "lane": "waterfall", "col": 4, "type": "cloud", "width": 144, "height": 72, "label": "Two-stage Classifier", "sublabel": "filter → review", "tag": "fail-closed" },
+    { "id": "rejected", "lane": "safety", "col": 3, "type": "security", "width": 104, "label": "Rejected", "sublabel": "reshape or ask" },
+    { "id": "breaker", "lane": "safety", "col": 5, "width": 108, "type": "messagebus", "label": "Circuit Breaker", "sublabel": "human resumes", "tag": "3 / 20 DENY" },
+    { "id": "detallow", "lane": "exec", "col": 2, "type": "backend", "width": 116, "label": "Fast Approve", "sublabel": "zero-LLM approvals" },
+    { "id": "execute", "lane": "exec", "col": 4, "type": "backend", "width": 112, "label": "Tool Executes", "sublabel": "returns result" }
+  ],
+  "edges": [
+    { "id": "intercept", "from": "toolcall", "to": "gate", "role": "main" },
+    { "id": "fastpath", "from": "gate", "to": "detallow", "fromSide": "bottom", "toSide": "top", "via": [[220, 520], [300, 520]], "role": "main" },
+    { "id": "torun", "from": "detallow", "to": "execute", "fromSide": "right", "toSide": "left", "role": "main" },
+    { "id": "escalate", "from": "gate", "to": "softrules", "fromSide": "bottom", "toSide": "top", "label": "escalation intent", "variant": "emphasis", "labelAt": [286, 300] },
+    { "id": "harddeny", "from": "gate", "to": "rejected", "fromSide": "left", "toSide": "left", "via": [[144, 243], [144, 491]], "label": "deny regex", "labelAt": [146, 380], "variant": "security", "role": "error" },
+    { "id": "review", "from": "softrules", "to": "classifier", "fromSide": "right", "toSide": "left", "route": "straight", "label": "cache miss" },
+    { "id": "allowed", "from": "classifier", "to": "execute", "fromSide": "bottom", "toSide": "top", "label": "verdict: allow", "labelAt": [508, 436] },
+    { "id": "denied", "from": "classifier", "to": "rejected", "fromSide": "bottom", "toSide": "top", "via": [[500, 415], [430, 415]], "label": "DENY · fail-closed", "labelAt": [430, 448], "variant": "security", "role": "error" },
+    { "id": "countdeny", "from": "classifier", "to": "breaker", "fromSide": "right", "toSide": "top", "via": [[625, 367], [625, 437]], "label": "counts DENY", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Deterministic layer",
+      "items": [
+        "Deny regexes hard-reject before any LLM call",
+        "Allow prefix-globs approve with zero LLM cost",
+        "Fast Approve = read-only tools, allow globs, in-tree ops",
+        "Unmatched non-escalating calls pass through to the DSH sandbox"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Fail-safe semantics",
+      "items": [
+        "Classifier timeout or parse error rejects the call (failClosed)",
+        "Classifier failures never count toward the breaker",
+        "3 consecutive or 20 total DENY trips the breaker and pauses auto mode",
+        "Any human decision resumes auto mode and resets counters"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Cost control",
+      "items": [
+        "Most calls never reach the LLM classifier",
+        "Stage 1 costs about one token; stage 2 runs only when flagged",
+        "Identical actions reuse cached verdicts for 5 minutes",
+        "Every decision lands in ~/.dsh/auto-mode/decisions.jsonl"
+      ]
+    }
+  ]
+}

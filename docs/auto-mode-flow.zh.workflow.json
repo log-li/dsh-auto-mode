@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "dsh-automode 拦截管线",
+    "quality_profile": "showcase",
+    "visual_preset": "signal-flow",
+    "output": "docs/auto-mode-flow.zh.html",
+    "viewBox": [780, 1000]
+  },
+  "lanes": [
+    { "id": "call", "label": "Agent 运行时" },
+    { "id": "gate", "label": "Pre-execute 门" },
+    { "id": "waterfall", "label": "Approval 瀑布" },
+    { "id": "safety", "label": "熔断与人工兜底", "variant": "exception" },
+    { "id": "exec", "label": "执行路径" }
+  ],
+  "phases": [
+    { "id": "intercept", "label": "拦截", "fromCol": 0, "toCol": 1 },
+    { "id": "decide", "label": "判定", "fromCol": 2, "toCol": 3 },
+    { "id": "outcome", "label": "执行", "fromCol": 4, "toCol": 5 }
+  ],
+  "groups": [
+    { "id": "wf_pipeline", "label": "LLM 判决管线", "lane": "waterfall", "fromCol": 2, "toCol": 4, "variant": "emphasis" }
+  ],
+  "mainPath": ["toolcall", "gate", "detallow", "execute"],
+  "nodes": [
+    { "id": "toolcall", "lane": "call", "col": 0, "type": "messagebus", "width": 92, "label": "工具调用", "sublabel": "执行前拦截" },
+    { "id": "gate", "lane": "gate", "col": 1, "type": "security", "width": 124, "height": 72, "label": "Pre-execute 门", "sublabel": "确定性规则", "tag": "全部工具" },
+    { "id": "softrules", "lane": "waterfall", "col": 2, "type": "security", "width": 116, "height": 72, "label": "软规则+缓存", "sublabel": "prose · 判决缓存" },
+    { "id": "classifier", "lane": "waterfall", "col": 4, "type": "cloud", "width": 144, "height": 72, "label": "两阶段分类器", "sublabel": "粗筛 → 结构化复审", "tag": "fail-closed" },
+    { "id": "rejected", "lane": "safety", "col": 3, "type": "security", "width": 112, "label": "拒绝", "sublabel": "改写或询问用户" },
+    { "id": "breaker", "lane": "safety", "col": 5, "width": 108, "type": "messagebus", "label": "熔断器", "sublabel": "人工恢复", "tag": "3 / 20 DENY" },
+    { "id": "detallow", "lane": "exec", "col": 2, "type": "backend", "width": 116, "label": "快速放行", "sublabel": "零 LLM 开销" },
+    { "id": "execute", "lane": "exec", "col": 4, "type": "backend", "width": 112, "label": "工具执行", "sublabel": "结果返回 agent" }
+  ],
+  "edges": [
+    { "id": "intercept", "from": "toolcall", "to": "gate", "role": "main" },
+    { "id": "fastpath", "from": "gate", "to": "detallow", "fromSide": "bottom", "toSide": "top", "via": [[220, 520], [300, 520]], "role": "main" },
+    { "id": "torun", "from": "detallow", "to": "execute", "fromSide": "right", "toSide": "left", "role": "main" },
+    { "id": "escalate", "from": "gate", "to": "softrules", "fromSide": "bottom", "toSide": "top", "label": "升级意图", "variant": "emphasis", "labelAt": [286, 300] },
+    { "id": "harddeny", "from": "gate", "to": "rejected", "fromSide": "left", "toSide": "left", "via": [[144, 243], [144, 491]], "label": "命中 deny 正则", "labelAt": [146, 380], "variant": "security", "role": "error" },
+    { "id": "review", "from": "softrules", "to": "classifier", "fromSide": "right", "toSide": "left", "route": "straight", "label": "缓存未命中" },
+    { "id": "allowed", "from": "classifier", "to": "execute", "fromSide": "bottom", "toSide": "top", "label": "判决：放行", "labelAt": [508, 436] },
+    { "id": "denied", "from": "classifier", "to": "rejected", "fromSide": "bottom", "toSide": "top", "via": [[500, 415], [430, 415]], "label": "DENY · fail-closed", "labelAt": [430, 448], "variant": "security", "role": "error" },
+    { "id": "countdeny", "from": "classifier", "to": "breaker", "fromSide": "right", "toSide": "top", "via": [[625, 367], [625, 437]], "label": "计入熔断计数", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "确定性层",
+      "items": [
+        "deny 正则在任何 LLM 调用之前硬拒绝",
+        "allow 前缀通配零 LLM 成本直接放行",
+        "快速放行 = 只读工具 + allow 规则 + 树内文件操作",
+        "未匹配且不升级的调用直通 DSH 沙箱"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "故障语义",
+      "items": [
+        "分类器超时或解析失败 → 按 failClosed 拒绝",
+        "分类器故障不计入熔断计数",
+        "连续 3 次或累计 20 次 DENY 触发熔断并暂停 auto mode",
+        "任何人工决定都会恢复 auto mode 并清零计数"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "成本控制",
+      "items": [
+        "绝大多数调用不会到达 LLM 分类器",
+        "第一阶段仅约 1 token；命中才进入第二阶段",
+        "相同动作 5 分钟内复用缓存判决",
+        "每次判定追加写入 ~/.dsh/auto-mode/decisions.jsonl"
+      ]
+    }
+  ]
+}

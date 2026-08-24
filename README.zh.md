@@ -56,6 +56,10 @@ dsh plugin add ./path/to/dsh-automode
        ⑥ 失败 → fail-closed
 ```
 
+![Auto mode 工具调用拦截管线](docs/auto-mode-flow.zh.png)
+
+> 🖱️ **可交互版本**：[docs/auto-mode-flow.zh.html](docs/auto-mode-flow.zh.html) —— 平移缩放、关系追踪、暗色模式。图表源数据：[`docs/auto-mode-flow.zh.workflow.json`](docs/auto-mode-flow.zh.workflow.json)。
+
 pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来不会触发 approval 瀑布的那些）。approval 瀑布只对真正需要沙箱升级的调用运行。pre-execute 门**仅对 auto-mode 会话生效**；在其他 preset（read-only / workspace-write / danger-full-access）下它是 no-op，不会与你所选沙箱冲突。
 
 ## 规则
