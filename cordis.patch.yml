@@ -64,12 +64,6 @@
           - list
           - search
         allowPaths:
-          - '~/OneDrive - The Hong Kong Polytechnic University/'
-          - '~/Library/CloudStorage/OneDrive-TheHongKongPolytechnicUniversity/Projects/GRF 2026/'
-          - '~/.agents/'
-          - '~/.bin/'
-          - '~/.claude/scripts/'
-          - '~/.claude/skills/'
           - '/tmp/'
         allowInsideWorkingDirectory: true
         failClosed: true
