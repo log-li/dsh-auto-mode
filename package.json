@@ -1,6 +1,6 @@
 {
   "name": "@log.li/dsh-automode",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "CC-style auto mode for DeepSeek Harness: deterministic deny/allow rules + pre-execute gate + model-agnostic two-stage classifier. TypeScript rewrite merging dsh-auto-mode v0.4.1 with Nuo-cl/dsh-auto-mode native integration.",
   "type": "module",
   "main": "lib/index.js",

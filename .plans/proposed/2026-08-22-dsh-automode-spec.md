@@ -146,3 +146,8 @@ src/
   2. `classifier.ts` `renderUserIntent`：**只保留 `source.kind === 'user'` 的人类消息**（排除 tool/plugin/system/model 注入），保证用户授权原话稳定进入意图窗口。
 - **验证**：`npm run build` + `npm test` 通过；提示词级场景测试（真实 provider）断言：skill 编辑+提权+git 可回退+用户授权 → allow；GET/只读 → allow；泄密/持久化/生产变更 → reject。重启后 E2E 复测。
 
+## 版本 0.7.0（2026-08-25 补记）
+
+- **版本**：0.6.2 → **0.7.0**（行为变更：风险导向分类、人类消息意图窗口、熔断器缓存计数、effort 回退）。
+- **边界**：审批通知由 hooks 层过滤（dsh-hooks `notify-approval` + `~/.dsh/scripts/notify-hook.sh`），**插件侧无法拦截**——实测 approval/request answerer 即使 `prepend` + 不调 `next()`（Cordis 瀑布否决）也不能抑制 dsh-hooks 的 `approval/asked` 通知（动态插件验证：answerer 短路了裁决、无 decision 记录，通知仍触发）。过滤语义见 profile `cordis.patch.yml` 的 `notify-approval` 注释。
+
