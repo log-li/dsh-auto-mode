@@ -11,8 +11,8 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { createUserMessage, type ContentBlock, type Message } from '@deepseek-ai/dsh-llm';
 
-/** A classifier decision: allow, ask a human, or reject. */
-export type VerdictDecision = 'allow' | 'ask' | 'reject';
+/** A classifier decision: allow or reject (two-state; ask was removed in 0.8.0). */
+export type VerdictDecision = 'allow' | 'reject';
 
 /** A parsed classifier verdict. */
 export interface Verdict {
@@ -335,7 +335,11 @@ export function parseVerdict(reply: string): Verdict | null {
           return verdict('reject', parsed.reason);
         if (/safe|allow|permit|approve|yes/.test(raw))
           return verdict('allow', parsed.reason);
-        if (raw === 'ask') return verdict('ask', parsed.reason);
+        // Two-state (0.8.0): legacy "ask" output is normalized to reject
+        // (fail-closed) — a rejected action can be retried or escalated, a
+        // wrongly-allowed one cannot be undone.
+        if (raw === 'ask')
+          return verdict('reject', 'uncertain (ask) — treated as reject (fail-closed)');
       }
     } catch {
       // not valid JSON — fall through to keyword scan

@@ -10,8 +10,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { type Message } from '@deepseek-ai/dsh-llm';
-/** A classifier decision: allow, ask a human, or reject. */
-export type VerdictDecision = 'allow' | 'ask' | 'reject';
+/** A classifier decision: allow or reject (two-state; ask was removed in 0.8.0). */
+export type VerdictDecision = 'allow' | 'reject';
 /** A parsed classifier verdict. */
 export interface Verdict {
     /** The decision. */

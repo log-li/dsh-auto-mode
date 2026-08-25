@@ -124,7 +124,6 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
       maxTokens: 2048
       temperature: 0
       reasoningLevel: off      # off / low / medium / high
-      askFallback: false       # true = 三态（allow/ask/reject）
 
     rules:
       deny: ['$defaults']
@@ -152,7 +151,6 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `allowPaths` | `[]` | 全信任的外部目录（curated）。 |
 | `allowInsideWorkingDirectory` | `true` | 工作区内文件操作不经分类器。 |
 | `classifier.provider` / `classifier.model` | `''`（跟随会话） | 覆盖分类器 LLM 路由。解析顺序：`classifier.{provider,model}` → 会话当前模型（request header）→ agent 配置模型。为空时分类器用会话正在使用的模型。 |
-| `classifier.askFallback` | `false` | `true`：分类器 "ask" → 人工询问。`false`："ask" → 拒绝。 |
 | `classifier.reasoningLevel` | `off` | 传给分类器的推理强度（`reasoningEffort`）：`off` 关闭推理；`low/medium/high` 开启。若路由拒绝该 effort（抛 `UNSUPPORTED_REASONING_EFFORT` **或** 以 `error` finish chunk 终结），调用会重试不传 effort。默认为 `off`：已在 opencode-go 路由实测 ~1–1.7s 返回、无 reasoning 块、不超时。 |
 | `rules.deny` | `['$defaults']` | 分类器软拒绝散文。 |
 | `rules.allow` | `['$defaults']` | 分类器软放行散文。 |
@@ -210,7 +208,11 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 ### 拒绝引导与诊断
 
-当一个动作被拒绝时，模型会被告知尝试更安全方案。若**没有更安全方案存在**，则指示其**停止重试并询问用户明确许可**——被拒绝的动作会一直失败，只有用户明确批准，后续尝试才可能通过（分类器经 `<recent_user_intent>` 权衡用户的最近显式意图）。
+分类器为**两态（allow / reject），无 ask 层**——不确定的动作直接拒绝（fail-closed）：拒绝可重试或升级到用户，误放不可逆，宁拒勿放。
+
+routine 类别（install/build/test/文件编辑/git add/commit/status）只是**倾向基准，不是免检通行证**——分类器必须判断**具体命令与参数**，不能只看类别标签（例如管道下载执行远程代码、未知包安装带任意 postinstall 脚本、写入 secrets、不可逆删除、推送未知 remote）。
+
+拒绝时，提示会回显**审查者的拒绝理由 + 模型自身在工具调用里写的操作解释（justification）**，让模型看清被拒的是什么、如何改造成更安全的形式。随后指示模型尝试更安全方案；若**没有更安全方案存在**，则**停止重试并询问用户明确许可**——被拒绝的动作会一直失败，只有用户明确批准，后续尝试才可能通过（分类器经 `<recent_user_intent>` 权衡用户的最近显式意图）。
 
 每次分类器流失败（抛异常**或** `error` finish chunk）都会写入 DSH 日志（带解析后的路由、effort、底层错误 code/message、模型原始输出），并作为 `classifier-fail` 事件写入 `decisions.jsonl`——反复出现的 `classifier returned no verdict` 直接从审计记录即可诊断。若路由拒绝配置的 `reasoningEffort`（例如只支持 `off` 的路由收到 `low`），调用会先重试不传 effort 再判定失败。
 

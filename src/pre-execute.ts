@@ -87,9 +87,15 @@ function collectDenyPaths(args: unknown): string[] {
   return out;
 }
 
-/** Denial envelope — reaches the model verbatim. */
-function denialText(category: string, reason: string): string {
-  return `dsh-automode denied this action (${category}): ${reason}. ` +
+/** Denial envelope — reaches the model verbatim.
+ * `modelExplanation` is the main model's own stated reason for the action
+ * (the justification from the tool call), echoed back so the model can see
+ * what the reviewer rejected and reshape it into a safer form. */
+function denialText(category: string, reason: string, modelExplanation?: string): string {
+  const echoed = modelExplanation
+    ? ` Your stated reason: "${modelExplanation}" — the reviewer still judged this unsafe; reshape the action into a safer form.`
+    : '';
+  return `dsh-automode denied this action (${category}): ${reason}.${echoed} ` +
     'Try a safer alternative. If there is NO safer alternative, STOP retrying and ask the user for explicit permission ' +
     '(a denied action will keep failing; only explicit user approval lets a later attempt pass).';
 }
@@ -263,7 +269,7 @@ export function registerPreExecute(
       if ((isEscalation || isOutOfTreeFileOp) && !breaker.isTripped(sid)) {
         const escReason = isEscalation
           ? `escalate sandbox to ${perm}: ${String(exec.arguments?.justification ?? commandText ?? toolName)}`
-          : `file operation outside trusted workspace: ${targetPaths.join(', ')}`;
+          : `file operation outside trusted workspace: ${targetPaths.join(', ')}${exec.arguments?.justification ? ` — model explanation: ${String(exec.arguments.justification)}` : ''}`;
 
         // Curated allowPaths trust (Bug 6): real symlink-resolved prefix match, not substring.
         if (targetPaths.length > 0 && targetPaths.every((p) => isInsideTrusted(p, roots))) {
@@ -363,7 +369,7 @@ export function registerPreExecute(
         );
 
         if (verdict) {
-          cache.put(sid, sig, verdict.decision === 'allow' ? 'ALLOW' : verdict.decision === 'reject' ? 'DENY' : null);
+          cache.put(sid, sig, verdict.decision === 'allow' ? 'ALLOW' : 'DENY');
 
           if (verdict.decision === 'reject') {
             const justTripped = breaker.countDeny(sid, config.breakerConsecutive, config.breakerTotal);
@@ -387,9 +393,12 @@ export function registerPreExecute(
                 } catch { /* best effort */ }
               }
             }
+            const modelExplanation = exec.arguments && typeof exec.arguments === 'object'
+              ? String((exec.arguments as Record<string, unknown>).justification ?? '')
+              : '';
             return {
               kind: 'deny',
-              reason: denialText(`classifier:${verdict.reason}`, `${verdict.reason} — reshape the command so it fits the allowlist, or drop the escalation`),
+              reason: denialText(`classifier:${verdict.reason}`, `${verdict.reason} — reshape the command so it fits the allowlist, or drop the escalation`, modelExplanation),
             };
           }
           if (verdict.decision === 'allow') {
@@ -397,17 +406,6 @@ export function registerPreExecute(
             appendDecision({ event: 'pre-execute-allow', tool: toolName, sessionId: sid, detail: verdict.reason });
             return next();
           }
-          // Bug 4: "ask" must honor askFallback, not silently allow.
-          if (config.classifier.askFallback) {
-            breaker.resetConsecutive(sid);
-            appendDecision({ event: 'pre-execute-allow', tool: toolName, sessionId: sid, detail: 'classifier ask → delegate (askFallback)' });
-            return next(); // best-effort: let the approval waterfall ask a human
-          }
-          appendDecision({ event: 'pre-execute-deny', tool: toolName, sessionId: sid, reason: 'classifier asked for human confirmation but askFallback is disabled' });
-          return {
-            kind: 'deny',
-            reason: denialText('classifier:ask', 'the classifier requested human confirmation but askFallback is disabled — ask the user directly or re-enable askFallback'),
-          };
         } else {
           // Classifier failure → fail-closed (Bug 1/3: timeout etc. now surface here).
           if (config.failClosed) {

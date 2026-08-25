@@ -67,8 +67,6 @@ export declare const Config: z<Schemastery.ObjectS<{
         temperature: z<number, number>;
         /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
-        /** When classifier returns "ask", fall back to human prompt. */
-        askFallback: z<boolean, boolean>;
         /** How many recent direct user messages feed the intent block (CC-style). */
         maxIntentMessages: z<number, number>;
     }>, Schemastery.ObjectT<{
@@ -84,8 +82,6 @@ export declare const Config: z<Schemastery.ObjectS<{
         temperature: z<number, number>;
         /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
-        /** When classifier returns "ask", fall back to human prompt. */
-        askFallback: z<boolean, boolean>;
         /** How many recent direct user messages feed the intent block (CC-style). */
         maxIntentMessages: z<number, number>;
     }>>;
@@ -136,8 +132,6 @@ export declare const Config: z<Schemastery.ObjectS<{
         temperature: z<number, number>;
         /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
-        /** When classifier returns "ask", fall back to human prompt. */
-        askFallback: z<boolean, boolean>;
         /** How many recent direct user messages feed the intent block (CC-style). */
         maxIntentMessages: z<number, number>;
     }>, Schemastery.ObjectT<{
@@ -153,8 +147,6 @@ export declare const Config: z<Schemastery.ObjectS<{
         temperature: z<number, number>;
         /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
-        /** When classifier returns "ask", fall back to human prompt. */
-        askFallback: z<boolean, boolean>;
         /** How many recent direct user messages feed the intent block (CC-style). */
         maxIntentMessages: z<number, number>;
     }>>;

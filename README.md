@@ -124,7 +124,6 @@ Configuration goes in your profile's `cordis.patch.yml`. Everything has defaults
       maxTokens: 2048
       temperature: 0
       reasoningLevel: off      # off / low / medium / high
-      askFallback: false       # true = three-state (allow/ask/reject)
 
     rules:
       deny: ['$defaults']
@@ -151,7 +150,6 @@ Configuration goes in your profile's `cordis.patch.yml`. Everything has defaults
 | `allowPaths` | `[]` | Curated full-trust external directories. |
 | `allowInsideWorkingDirectory` | `true` | Allow in-tree file ops without classifier. |
 | `classifier.provider` / `classifier.model` | `''` (follow session) | Override the classifier's LLM route. Resolution order: `classifier.{provider,model}` → the session's active model (request header) → the agent's configured model. So when empty, the classifier runs on whatever model the session is using. |
-| `classifier.askFallback` | `false` | `true`: classifier "ask" → human prompt. `false`: "ask" → reject. |
 | `classifier.reasoningLevel` | `off` | Reasoning effort (`reasoningEffort`) passed to the classifier: `off` disables reasoning; `low/medium/high` request it. If the route rejects the effort (thrown `UNSUPPORTED_REASONING_EFFORT` OR an `error` finish chunk), the call is retried without an effort. `off` is the default: verified ~1–1.7 s on the opencode-go route with no reasoning blocks and no timeouts. |
 | `rules.deny` | `['$defaults']` | Soft-deny prose for the classifier. |
 | `rules.allow` | `['$defaults']` | Soft-allow prose for the classifier. |
@@ -209,7 +207,11 @@ Classifier failures (timeout, parse error, empty response) are NOT counted towar
 
 ### Denial guidance & diagnostics
 
-When an action is denied, the model is told to try a safer alternative. If **no safer alternative exists**, it is instructed to **stop retrying and ask the user for explicit permission** — a denied action will keep failing, and only explicit user approval lets a later attempt pass (the classifier weighs the user's recent explicit intent via `<recent_user_intent>`).
+The classifier is **two-state (allow / reject)** — there is no "ask" tier. An uncertain action is rejected (fail-closed): a rejected action can be retried in a safer form or escalated to the user, but a wrongly-allowed action cannot be undone.
+
+Routine categories (installs, builds, tests, file edits, git add/commit/status) are a **tendency, not a free pass** — the classifier must judge the specific command and arguments, never the category label alone (e.g. pipe-to-shell downloads, unknown-package installs with arbitrary postinstall scripts, secret writes, irreversible deletes, pushes to unknown remotes).
+
+When an action is denied, the denial echoes the **reviewer's reason AND the model's own stated justification** (from the tool call), so the model can see exactly what was rejected and reshape it. It is told to try a safer alternative; if **no safer alternative exists**, it is instructed to **stop retrying and ask the user for explicit permission** — a denied action will keep failing, and only explicit user approval lets a later attempt pass (the classifier weighs the user's recent explicit intent via `<recent_user_intent>`).
 
 Every classifier stream failure (thrown error **or** an `error` finish chunk) is logged to the DSH log with the resolved route, effort, error code/message, and raw output, and written to `decisions.jsonl` as a `classifier-fail` event — so a recurring `classifier returned no verdict` is diagnosable from the audit log itself. If a route rejects the configured `reasoningEffort` (e.g. `low` on a route that only supports `off`), the call is retried without an effort before failing.
 

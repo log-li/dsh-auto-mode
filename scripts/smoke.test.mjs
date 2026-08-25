@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { findAllowRule, findDenyRule, isAllowlisted, patternMatches } from '../lib/rules.js';
 import { parseVerdict, renderTranscript } from '../lib/classifier.js';
 import { buildSystemPrompt, buildUserMessage } from '../lib/prompt.js';
-import { askHumanForDecision, isAuto, writeAutoMode } from '../lib/index.js';
+import { isAuto, writeAutoMode } from '../lib/index.js';
 import { Breaker } from '../lib/breaker.js';
 
 let passed = 0;
@@ -47,18 +47,19 @@ test('allowlist is case-insensitive', () => {
 });
 
 console.log('classifier.js');
-test('parses three-value decision verdict', () => {
+test('parses two-value decision verdict (ask is normalized to reject)', () => {
   assert.deepEqual(
     parseVerdict('{"decision": "allow", "reason": "safe read"}'),
     { decision: 'allow', reason: 'safe read' },
   );
   assert.deepEqual(
-    parseVerdict('{"decision": "ask", "reason": "may be intended"}'),
-    { decision: 'ask', reason: 'may be intended' },
-  );
-  assert.deepEqual(
     parseVerdict('{"decision": "reject", "reason": "dangerous"}'),
     { decision: 'reject', reason: 'dangerous' },
+  );
+  // Two-state (0.8.0): legacy "ask" output fails closed → reject.
+  assert.deepEqual(
+    parseVerdict('{"decision": "ask", "reason": "may be intended"}'),
+    { decision: 'reject', reason: 'uncertain (ask) — treated as reject (fail-closed)' },
   );
 });
 test('parses JSON inside markdown fence', () => {
@@ -89,7 +90,7 @@ test('legacy boolean verdict still parses', () => {
 test('falls back to decision/allow token scan', () => {
   // NOTE: the refactored keyword fallback has no `ask` signal, so a bare
   // `decision = "ask"` (non-JSON) yields null (fail-closed upstream). The JSON
-  // path is the only route to an 'ask' verdict (see `{"decision":"ask"}`).
+  // path normalizes `{"decision":"ask"}` to reject (see two-value test above).
   assert.equal(parseVerdict('decision = "ask" definitely'), null);
   // CAVEAT (fail-open): the keyword scan matches the bare word "allow", so
   // `allow = false` is read as allow, not reject. JSON `{"allow":false}` is the
@@ -247,119 +248,6 @@ test('writeAutoMode is a no-op when auto mode is already selected', () => {
   writeAutoMode(ctx, agent);
   assert.equal(events.length, 1);
   assert.equal(injected.length, 0);
-});
-
-console.log('human decision flow (index.js)');
-
-function makeQuestionHarness(answer) {
-  const questions = [];
-  const ctx = {
-    get(name) {
-      if (name === 'userQuestions') {
-        return {
-          ask(request) {
-            questions.push(request);
-            return Promise.resolve(answer);
-          },
-        };
-      }
-      return undefined;
-    },
-  };
-  const req = { agent: { id: 'a1' }, toolName: 'pwsh', reason: 'needs admin' };
-  return { ctx, req, questions };
-}
-
-test('askHumanForDecision: allow option', async () => {
-  const { ctx, req } = makeQuestionHarness({
-    answers: [{ id: 'auto-mode-approval', selected: ['允许'], custom: '' }],
-  });
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'allow' });
-});
-
-test('askHumanForDecision: reject option', async () => {
-  const { ctx, req } = makeQuestionHarness({
-    answers: [{ id: 'auto-mode-approval', selected: ['拒绝'], custom: '' }],
-  });
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'reject' });
-});
-
-test('askHumanForDecision: reject-with-instructions', async () => {
-  const { ctx, req } = makeQuestionHarness({
-    answers: [
-      { id: 'auto-mode-approval', selected: ['拒绝并指示'], custom: ' 用 read 代替  ' },
-    ],
-  });
-  assert.deepEqual(await askHumanForDecision(ctx, req), {
-    kind: 'reject-with-text',
-    text: '用 read 代替',
-  });
-});
-
-test('askHumanForDecision: custom text alone counts as reject-with-instructions', async () => {
-  const { ctx, req } = makeQuestionHarness({
-    answers: [{ id: 'auto-mode-approval', selected: [], custom: '换个方式' }],
-  });
-  assert.deepEqual(await askHumanForDecision(ctx, req), {
-    kind: 'reject-with-text',
-    text: '换个方式',
-  });
-});
-
-test('askHumanForDecision: no provider is unavailable', async () => {
-  const ctx = { get: () => undefined };
-  const req = { agent: { id: 'a1' }, toolName: 'pwsh' };
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'unavailable' });
-});
-
-test('askHumanForDecision: skipped question is a rejection (fail closed)', async () => {
-  const { ctx, req } = makeQuestionHarness({ answers: [] });
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'reject' });
-});
-
-test('askHumanForDecision: unanswered question is a rejection', async () => {
-  const { ctx, req } = makeQuestionHarness({
-    answers: [{ id: 'auto-mode-approval', selected: [], custom: '' }],
-  });
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'reject' });
-});
-
-test('askHumanForDecision: ASK_ABORTED (user dismissed) is a rejection', async () => {
-  const ctx = {
-    get: () => ({
-      ask: () =>
-        Promise.reject(Object.assign(new Error('dismissed'), { code: 'ASK_ABORTED' })),
-    }),
-  };
-  const req = { agent: { id: 'a1' }, toolName: 'pwsh' };
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'reject' });
-});
-
-test('askHumanForDecision: aborted signal is cancelled', async () => {
-  const ctx = {
-    get: () => ({
-      ask: () =>
-        Promise.reject(Object.assign(new Error('aborted'), { code: 'ASK_ABORTED' })),
-    }),
-  };
-  const controller = new AbortController();
-  controller.abort();
-  const req = {
-    agent: { id: 'a1' },
-    toolName: 'pwsh',
-    signal: controller.signal,
-  };
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'cancelled' });
-});
-
-test('askHumanForDecision: provider throw is unavailable', async () => {
-  const ctx = {
-    get: () => ({
-      ask: () => Promise.reject(new Error('boom')),
-    }),
-  };
-  const req = { agent: { id: 'a1' }, toolName: 'pwsh' };
-  assert.deepEqual(await askHumanForDecision(ctx, req), { kind: 'unavailable' });
 });
 
 console.log('\nbreaker.js');

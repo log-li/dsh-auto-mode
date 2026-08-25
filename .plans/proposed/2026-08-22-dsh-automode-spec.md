@@ -29,7 +29,7 @@ Status: implemented
 | 语言 | TypeScript |
 | 规则体系 | deny（正则硬拒绝）+ allow（前缀 glob 白名单）+ 散文规则给分类器 |
 | 读取策略 | 只读工具默认放行，deny 列表里的敏感位置除外 |
-| 决策模型 | 二态为主（askFallback=false），可配置开启三态 |
+| 决策模型 | **二态（allow / reject），无 ask 态**（2026-08-26 定稿：移除三态） |
 | 分类器路由 | `classifier.provider` + `classifier.model` 独立配置 |
 | pre-execute 门 | 核心差异特性，围栏内外都跑 deny/allow |
 | 持久化日志 | JSONL |
@@ -76,7 +76,7 @@ src/
 
 ### 两阶段分类器
 - `fastFilter`（one-token 预筛）：512 token 预算 + **独立 0/1 数字解析**，避免 reasoning 模型被 token 预算饿死；传入 `classifier.reasoningLevel` 作为 `reasoningEffort`；若路由不支持 effort（dsh-llm 抛 `UNSUPPORTED_REASONING_EFFORT`，或流以 `finish {kind:'error'}` 终结且 `reason.failure.code === UNSUPPORTED_REASONING_EFFORT`）则**安全回退为不传**（`streamTokens` 统一处理，抛异常与 error-finish 两条路径都重试）。
-- `classify`（结构化裁决）：鲁棒解析 JSON verdict（allow / ask / reject）；失败返回 null → 调用方按 `failClosed` 处理。
+- `classify`（结构化裁决）：鲁棒解析 JSON verdict（**allow / reject 二态**）；失败返回 null → 调用方按 `failClosed` 处理。
 
 ### 熔断器
 - 3 连续或 20 总 classifier DENY 触发跳闸；跳闸后 auto 暂停，审批转人工。
@@ -150,4 +150,32 @@ src/
 
 - **版本**：0.6.2 → **0.7.0**（行为变更：风险导向分类、人类消息意图窗口、熔断器缓存计数、effort 回退）。
 - **边界**：审批通知由 hooks 层过滤（dsh-hooks `notify-approval` + `~/.dsh/scripts/notify-hook.sh`），**插件侧无法拦截**——实测 approval/request answerer 即使 `prepend` + 不调 `next()`（Cordis 瀑布否决）也不能抑制 dsh-hooks 的 `approval/asked` 通知（动态插件验证：answerer 短路了裁决、无 decision 记录，通知仍触发）。过滤语义见 profile `cordis.patch.yml` 的 `notify-approval` 注释。
+
+## 两态化：移除 ask 态 + deny 提示增强（2026-08-26 补记）
+
+### 决策（用户定稿）
+- **分类器只输出两态：`allow` / `reject`，删除 `ask` 态**。`classifier.askFallback` 配置项随之移除（不再需要"ask 时是否弹人工"的开关）。
+- **理由**（grill 确认）：
+  1. prompt 从未定义"何时 ask"的触发契约——ask 只出现在输出格式示例里，分类器输出 ask 是无依据的灰色地带。
+  2. `askFallback=false`（原默认）下 ask 行为 ≡ reject（fail-closed），ask 是行为冗余态。
+  3. "需要人工"的通道已存在且不依赖 ask：熔断器（3 连拒 / 20 总拒 → 跳闸 → 审批转人工）+ `BREAKER_TRIPPED_HINT` 引导模型直接请求 `danger-full-access` 升级（升级本身弹人工审批窗口）。
+  4. ask 态在 `askFallback=true` 时 `resetConsecutive`，会**削弱熔断保护**（分类器不确定→弹窗→计数器清零，连拒跳闸形同虚设）。去掉 ask 后该漏洞消失。
+- **deny 提示增强**：deny 时提示 = 分类器拒绝理由 + **主模型当时的操作解释（justification，如有）** + 安全替代引导（找更安全方法；无则停止重试、询问用户明确许可）。
+- **justification 透传补全**：原实现只在 **escalation** 场景把 `exec.arguments.justification` 拼进分类器 prompt（`escReason`）；**非 escalation 的越区文件操作**只传路径、不带 justification。两态化时统一补上，让分类器判定与 deny 回显都能看到主模型的操作原因。
+
+### prompt 契约（两态）
+- 输出格式仅两种：`{"decision":"allow","reason":"<sentence>"}` / `{"decision":"reject","reason":"<sentence>"}`。
+- **明确指示"何时 reject"新增一条：不确定时 REJECT（fail-closed）**——拒绝可重试或升级到用户，误放不可逆；宁拒勿放。
+- **类别只是倾向，具体内容为准（2026-08-26 修正）**：原 "EVERYTHING routine — installs, builds, tests, file edits, git add/commit/status — is SAFE" 是**绝对化断言**，存在**伪装绕过风险**——`curl|sh` 可包装成 install、git push 到未知 remote 可包装成 git 操作、未知包安装可带任意 postinstall 脚本、edit 可写 secrets。改为：routine 类别**通常**安全/可逆（倾向基准），但**必须判断具体命令与参数**，并显式列出"看似 routine 实则危险"的伪装特征（下载执行远程代码、未知包安装、写 secrets、不可逆删除、推未知 remote、关闭保护、触达共享/生产/外部状态）。
+- 原有指示保留：可逆/用户明确要求 → allow；不可逆破坏/泄密/持久化/削弱安全/共享生产外部状态/不服务当前请求 → reject。
+
+### 代码改动
+- `classifier.ts`：`VerdictDecision = 'allow' | 'reject'`；`parseVerdict` 中 `raw==='ask'` **映射为 reject**（reason 注明 "uncertain (ask) — treated as reject (fail-closed)"），保证老模型输出 ask 时 fail-closed。
+- `prompt.ts`：输出格式示例删 ask 行；新增不确定→reject 指示。
+- `pre-execute.ts`：删 ask 分支（原 400-410）；`cache.put` 三态三目简化为二态；deny 提示（`denialText`）回显分类器 reason + 主模型 justification；非 escalation 越区文件操作的 `escReason` 补 justification。
+- `index.ts`：approval 瀑布删 `case 'ask'` 与 `askHumanForDecision`/`HumanDecision`/`UserQuestionsLike`（无其他引用）；`index.ts:104/452/478` 的 `'ask'` 是 DSH 审批策略枚举（非分类器态），**保留不动**。
+- `config.ts`：删 `classifier.askFallback` 字段；`cordis.patch.yml` 删对应配置行（zod object 默认 strip 未知 key，残留不报错但为整洁一并删除）。
+- README（EN/ZH）同步：删 askFallback 说明，决策模型改两态。
+- **版本**：0.7.0 → **0.8.0**（行为变更：移除 ask 态、deny 提示增强、justification 透传）。
+- **验证**：`npm run build` + `npm test`；提示词级场景测试断言：常规 → allow；危险 → reject；**模型输出 ask → 归一为 reject**；越区文件操作带 justification → 分类器 prompt 可见。重启 dsh 后 E2E。
 

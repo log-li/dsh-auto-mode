@@ -83,8 +83,8 @@
           # 实测 opencode-go 路由不支持 low/medium/high（以 error-finish 拒绝）；
           # off 与不传 effort 均 ~1-1.7s 返回、无 reasoning 块、不超时。
           # 代码侧已加 error-finish 无 effort 回退，其他路由仍可用 low/high。
+          # 2026-08-26：分类器两态化（allow/reject），askFallback 配置已移除。
           reasoningLevel: off
-          askFallback: false
         rules:
           deny: ['$defaults']
           allow: ['$defaults']

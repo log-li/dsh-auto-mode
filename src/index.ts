@@ -121,57 +121,6 @@ export function writeAutoMode(ctx: Context, agent: Agent): void {
   }));
 }
 
-// ---- Human ask (Nuo-cl, for askFallback=true) ----
-
-interface UserQuestionsLike {
-  ask(req: {
-    agent: Agent;
-    signal?: AbortSignal;
-    questions: Array<{ id: string; question: string; detail?: string; header?: string; options?: Array<{ label: string; description?: string }> }>;
-  }): Promise<{ answers: Array<{ id: string; selected: string[]; custom?: string }> }>;
-}
-
-type HumanDecision =
-  | { kind: 'allow' }
-  | { kind: 'reject' }
-  | { kind: 'reject-with-text'; text: string }
-  | { kind: 'cancelled' }
-  | { kind: 'unavailable' };
-
-export async function askHumanForDecision(ctx: Context, req: ApprovalRequest): Promise<HumanDecision> {
-  const uq = ctx.get('userQuestions') as UserQuestionsLike | undefined;
-  if (!uq) return { kind: 'unavailable' };
-  try {
-    const answer = await uq.ask({
-      agent: req.agent,
-      signal: req.signal,
-      questions: [{
-        id: 'auto-mode-approval',
-        header: 'Auto mode 权限确认',
-        question: `工具调用 ${req.toolName} 需要你的确认。${req.reason ? `原因：${req.reason}` : ''}`,
-        detail: '分类器无法确定该操作是否符合你的意图，请人工决定。',
-        options: [
-          { label: '允许', description: '放行本次操作' },
-          { label: '拒绝', description: '拒绝本次操作' },
-          { label: '拒绝并指示', description: '拒绝操作，并输入你期望的处理方式' },
-        ],
-      }],
-    });
-    const item = answer.answers[0];
-    const selected = item?.selected ?? [];
-    const custom = item?.custom?.trim();
-    if (selected.includes('允许')) return { kind: 'allow' };
-    if (selected.includes('拒绝并指示') && custom) return { kind: 'reject-with-text', text: custom };
-    if (selected.includes('拒绝并指示') || selected.includes('拒绝')) return { kind: 'reject' };
-    if (custom) return { kind: 'reject-with-text', text: custom };
-    return { kind: 'reject' };
-  } catch (error) {
-    if (req.signal?.aborted) return { kind: 'cancelled' };
-    if ((error as { code?: string } | null)?.code === 'ASK_ABORTED') return { kind: 'reject' };
-    return { kind: 'unavailable' };
-  }
-}
-
 // ---- Main decision chain ----
 
 function denialText(category: string, reason: string): string {
@@ -347,39 +296,20 @@ async function decideAuto(
             source: { kind: 'plugin', plugin: 'auto-mode' },
           }));
         }
-        // Inject explanation so the model knows it was the reviewer, not a human
+        // Inject explanation so the model knows it was the reviewer, not a human.
+        // Echo the model's own stated reason (req.reason carries the escalation
+        // justification) so it can see what was rejected and reshape it.
+        const echoed = req.reason ? ` Your stated reason: "${req.reason}" — the reviewer still judged this unsafe.` : '';
         agent.inject(createUserMessage({
           content: [{
             type: 'text',
-            text: `Auto mode blocked the ${toolName} call. Reviewer reason: ${verdict.reason}. ` +
+            text: `Auto mode blocked the ${toolName} call. Reviewer reason: ${verdict.reason}.${echoed} ` +
               'The tool result may say "the user rejected" — in auto mode that usually means the reviewer, not a person. ' +
               'Try a smaller or safer version, or ask the user for explicit permission.',
           }],
           source: { kind: 'plugin', plugin: 'auto-mode' },
         }));
         return 'rejected';
-      }
-
-      case 'ask': {
-        if (!config.classifier.askFallback) {
-          logger.info(`classifier asked for human confirmation — treating as rejection (askFallback=false)`);
-          return 'rejected';
-        }
-        // A human is now engaged — the consecutive classifier-deny streak is over.
-        breaker.resetConsecutive(sid);
-        const decision = await askHumanForDecision(ctx, req);
-        switch (decision.kind) {
-          case 'allow': return 'allowed-once';
-          case 'reject': return 'rejected';
-          case 'cancelled': return 'cancelled';
-          case 'reject-with-text':
-            agent.inject(createUserMessage({
-              content: [{ type: 'text', text: decision.text }],
-              source: { kind: 'user' },
-            }));
-            return 'rejected';
-          case 'unavailable': return next();
-        }
       }
     }
   }

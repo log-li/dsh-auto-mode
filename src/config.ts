@@ -183,8 +183,6 @@ export const Config = z.object({
     temperature: z.number().default(0),
     /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
     reasoningLevel: z.string().default('off'),
-    /** When classifier returns "ask", fall back to human prompt. */
-    askFallback: z.boolean().default(false),
     /** How many recent direct user messages feed the intent block (CC-style). */
     maxIntentMessages: z.number().default(6).min(1),
   }),

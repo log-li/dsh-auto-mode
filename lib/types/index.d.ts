@@ -15,24 +15,10 @@ import type { Context } from '@deepseek-ai/cordis';
 import '@deepseek-ai/dsh-commands';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { Session } from '@deepseek-ai/dsh-session';
-import { type ApprovalRequest } from '@deepseek-ai/dsh-user-approval';
 import { Config } from './config.js';
 export declare const name = "dsh-automode";
 export { Config };
 export declare const inject: string[];
 export declare function isAuto(session: Session): boolean;
 export declare function writeAutoMode(ctx: Context, agent: Agent): void;
-type HumanDecision = {
-    kind: 'allow';
-} | {
-    kind: 'reject';
-} | {
-    kind: 'reject-with-text';
-    text: string;
-} | {
-    kind: 'cancelled';
-} | {
-    kind: 'unavailable';
-};
-export declare function askHumanForDecision(ctx: Context, req: ApprovalRequest): Promise<HumanDecision>;
 export declare function apply(ctx: Context, rawConfig: unknown): void;
