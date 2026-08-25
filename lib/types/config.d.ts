@@ -65,7 +65,7 @@ export declare const Config: z<Schemastery.ObjectS<{
         maxTokens: z<number, number>;
         /** Sampling temperature. */
         temperature: z<number, number>;
-        /** Reasoning level hint (low/medium/high). */
+        /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
         /** When classifier returns "ask", fall back to human prompt. */
         askFallback: z<boolean, boolean>;
@@ -82,7 +82,7 @@ export declare const Config: z<Schemastery.ObjectS<{
         maxTokens: z<number, number>;
         /** Sampling temperature. */
         temperature: z<number, number>;
-        /** Reasoning level hint (low/medium/high). */
+        /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
         /** When classifier returns "ask", fall back to human prompt. */
         askFallback: z<boolean, boolean>;
@@ -134,7 +134,7 @@ export declare const Config: z<Schemastery.ObjectS<{
         maxTokens: z<number, number>;
         /** Sampling temperature. */
         temperature: z<number, number>;
-        /** Reasoning level hint (low/medium/high). */
+        /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
         /** When classifier returns "ask", fall back to human prompt. */
         askFallback: z<boolean, boolean>;
@@ -151,7 +151,7 @@ export declare const Config: z<Schemastery.ObjectS<{
         maxTokens: z<number, number>;
         /** Sampling temperature. */
         temperature: z<number, number>;
-        /** Reasoning level hint (low/medium/high). */
+        /** Reasoning level hint (off/low/medium/high); 'off' disables reasoning. */
         reasoningLevel: z<string, string>;
         /** When classifier returns "ask", fall back to human prompt. */
         askFallback: z<boolean, boolean>;

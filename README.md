@@ -123,7 +123,7 @@ Configuration goes in your profile's `cordis.patch.yml`. Everything has defaults
       maxTranscriptMessages: 40
       maxTokens: 2048
       temperature: 0
-      reasoningLevel: low      # low / medium / high
+      reasoningLevel: off      # off / low / medium / high
       askFallback: false       # true = three-state (allow/ask/reject)
 
     rules:
@@ -152,7 +152,7 @@ Configuration goes in your profile's `cordis.patch.yml`. Everything has defaults
 | `allowInsideWorkingDirectory` | `true` | Allow in-tree file ops without classifier. |
 | `classifier.provider` / `classifier.model` | `''` (follow session) | Override the classifier's LLM route. Resolution order: `classifier.{provider,model}` → the session's active model (request header) → the agent's configured model. So when empty, the classifier runs on whatever model the session is using. |
 | `classifier.askFallback` | `false` | `true`: classifier "ask" → human prompt. `false`: "ask" → reject. |
-| `classifier.reasoningLevel` | `low` | Reasoning effort (`reasoningEffort`) passed to the classifier. Falls back (retries without it) if the route doesn't support the effort. |
+| `classifier.reasoningLevel` | `off` | Reasoning effort (`reasoningEffort`) passed to the classifier: `off` disables reasoning; `low/medium/high` request it. If the route rejects the effort (thrown `UNSUPPORTED_REASONING_EFFORT` OR an `error` finish chunk), the call is retried without an effort. `off` is the default: verified ~1–1.7 s on the opencode-go route with no reasoning blocks and no timeouts. |
 | `rules.deny` | `['$defaults']` | Soft-deny prose for the classifier. |
 | `rules.allow` | `['$defaults']` | Soft-allow prose for the classifier. |
 | `rules.environment` | `['$defaults']` | Environment facts for the classifier. |
@@ -188,10 +188,16 @@ The icon is cosmetic — auto mode behaves identically whether or not it renders
 
 The classifier uses two stages to minimize LLM cost:
 
-1. **One-token filter** (~1 token): asks the LLM for a single digit (0 = safe, 1 = needs review). Uses a generous token budget and robust digit parsing so reasoning models aren't starved, and honors `classifier.reasoningLevel` as the reasoning effort. Most routine actions return 0 and skip stage 2.
+1. **One-token filter** (~1 token): asks the LLM for a single digit (0 = safe, 1 = needs review). Uses a generous token budget and robust digit parsing so reasoning models aren't starved, and honors `classifier.reasoningLevel` as the reasoning effort (`off` = no reasoning). Most routine actions return 0 and skip stage 2.
 2. **Structured review**: only runs when stage 1 flags the action. Returns a full verdict with reason.
 
 This means most tool calls cost ~1 token of classifier overhead. Only borderline actions incur the full classifier cost.
+
+The classifier is **risk-based** — it judges the action's real-world impact, not its surface form:
+
+- **Read-only and reversible operations are ALLOWED**: GET/HEAD requests, inspection/listing/search/state queries, and local changes that can be safely undone (edits, temp files, builds, tests, git-tracked files).
+- **A sandbox-escalation request is NOT dangerous by itself** — the classifier judges the action it enables. A reversible, low-blast-radius, user-aligned action may be allowed even when it needs escalation (e.g. editing a git-tracked skill or config file outside the working directory). Escalation for a genuinely dangerous action (exfiltration, persistence, weakening security, shared/production/external state) stays forbidden.
+- **`<recent_user_intent>` counts only direct human messages.** Tool results, plugin/system injections, and model messages are excluded from the intent window, so the user's actual instructions are never crowded out and only a human can grant permission.
 
 ### Circuit breaker
 
@@ -199,13 +205,13 @@ When the classifier denies 3 actions in a row or 20 total in a session, the brea
 
 At the moment the breaker trips, the plugin injects a hint telling the model to request `danger-full-access` sandbox escalation **directly** on its next attempt (which surfaces the human approval window immediately), instead of the "try at current level → hit a denied error → then escalate" round-trip.
 
-Classifier failures (timeout, parse error, empty response) are NOT counted toward the breaker.
+Classifier failures (timeout, parse error, empty response) are NOT counted toward the breaker. **Cached denies count, however** — a repeat of an identical previously-denied action (verdict cache hit) increments the consecutive and total counters, so repeated escalation attempts actually trip the breaker and reach the human instead of spinning forever.
 
 ### Denial guidance & diagnostics
 
 When an action is denied, the model is told to try a safer alternative. If **no safer alternative exists**, it is instructed to **stop retrying and ask the user for explicit permission** — a denied action will keep failing, and only explicit user approval lets a later attempt pass (the classifier weighs the user's recent explicit intent via `<recent_user_intent>`).
 
-Classifier failures are logged to the DSH log (not the decisions log) with the resolved route (`provider/model`), the underlying error code/message, and the raw model output. This makes a recurring `classifier returned no verdict` diagnosable — the usual cause is the classifier inheriting the session's heavy reasoning model, whose chain-of-thought starves the classifier token budget (or a slow/free gateway timing out).
+Every classifier stream failure (thrown error **or** an `error` finish chunk) is logged to the DSH log with the resolved route, effort, error code/message, and raw output, and written to `decisions.jsonl` as a `classifier-fail` event — so a recurring `classifier returned no verdict` is diagnosable from the audit log itself. If a route rejects the configured `reasoningEffort` (e.g. `low` on a route that only supports `off`), the call is retried without an effort before failing.
 
 ### Verdict cache
 
@@ -216,7 +222,7 @@ Classifier verdicts are cached per session by tool + command signature. If the s
 All decisions are logged to `~/.dsh/auto-mode/decisions.jsonl` (JSONL format, append-only, survives restarts). Each entry includes:
 
 - `at` — ISO timestamp
-- `event` — decision / pre-execute-deny / pre-execute-allow / breaker / resume / boot
+- `event` — decision / pre-execute-deny / pre-execute-allow / pre-execute-fileop / pre-execute-fail-open / classifier-fail / breaker / resume / boot
 - `outcome` — allowed-once / rejected / cancelled
 - `tool` — tool name
 - `tier` — deny / allow / classify:monitor / classify:cache / classify:fail / ...

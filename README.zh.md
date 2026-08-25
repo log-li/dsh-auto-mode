@@ -123,7 +123,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
       maxTranscriptMessages: 40
       maxTokens: 2048
       temperature: 0
-      reasoningLevel: low      # low / medium / high
+      reasoningLevel: off      # off / low / medium / high
       askFallback: false       # true = 三态（allow/ask/reject）
 
     rules:
@@ -153,7 +153,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `allowInsideWorkingDirectory` | `true` | 工作区内文件操作不经分类器。 |
 | `classifier.provider` / `classifier.model` | `''`（跟随会话） | 覆盖分类器 LLM 路由。解析顺序：`classifier.{provider,model}` → 会话当前模型（request header）→ agent 配置模型。为空时分类器用会话正在使用的模型。 |
 | `classifier.askFallback` | `false` | `true`：分类器 "ask" → 人工询问。`false`："ask" → 拒绝。 |
-| `classifier.reasoningLevel` | `low` | 传给分类器的推理强度（`reasoningEffort`）。若路由不支持该 effort 则回退（重试不传）。 |
+| `classifier.reasoningLevel` | `off` | 传给分类器的推理强度（`reasoningEffort`）：`off` 关闭推理；`low/medium/high` 开启。若路由拒绝该 effort（抛 `UNSUPPORTED_REASONING_EFFORT` **或** 以 `error` finish chunk 终结），调用会重试不传 effort。默认为 `off`：已在 opencode-go 路由实测 ~1–1.7s 返回、无 reasoning 块、不超时。 |
 | `rules.deny` | `['$defaults']` | 分类器软拒绝散文。 |
 | `rules.allow` | `['$defaults']` | 分类器软放行散文。 |
 | `rules.environment` | `['$defaults']` | 分类器环境事实。 |
@@ -189,10 +189,16 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 分类器用两阶段把 LLM 成本降到最低：
 
-1. **One-token 预筛**（~1 token）：让 LLM 只回一个数字（0 = 安全，1 = 需审查）。使用宽松的 token 预算和鲁棒的数字解析，避免 reasoning 模型被饿死，并把 `classifier.reasoningLevel` 作为推理强度传入。大多数常规动作返回 0 直接跳过阶段 2。
+1. **One-token 预筛**（~1 token）：让 LLM 只回一个数字（0 = 安全，1 = 需审查）。使用宽松的 token 预算和鲁棒的数字解析，避免 reasoning 模型被饿死，并把 `classifier.reasoningLevel` 作为推理强度传入（`off` = 不推理）。大多数常规动作返回 0 直接跳过阶段 2。
 2. **结构化裁决**：仅当阶段 1 标记时才运行。返回完整 verdict 及理由。
 
 这意味着大多数工具调用只产生 ~1 token 的分类器开销，只有边界情况才 incur 完整分类器成本。
+
+分类器是**风险导向**的——它判断动作的**真实影响**，而不是表面形式：
+
+- **只读与可恢复操作一律 ALLOW**：GET/HEAD 请求、检视/列举/搜索/状态查询，以及可以安全撤销的本地改动（编辑、临时文件、构建、测试、git 跟踪文件）。
+- **沙箱提权请求本身不是危险**——分类器判断它启用的动作。可逆、低影响面、与用户意图对齐的动作，即使需要提权也可放行（例如编辑工作区外的 git 仓库 skill/配置文件）；为真危险动作（泄密、持久化、削弱安全、共享/生产/外部状态）提权仍被禁止。
+- **`<recent_user_intent>` 只计入直接的人类消息**。工具结果、插件/系统注入、模型消息都被排除在意图窗口外——你的真实指令不会被挤掉，也只有人类才能授予权限。
 
 ### 熔断器
 
@@ -200,13 +206,13 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 在熔断器跳闸的瞬间，插件会注入一段提示，告诉模型在**下一次尝试就直接请求 `danger-full-access` 沙箱升级**（立即弹出人工批准窗口），而不是"先以当前权限试一次 → 命中 denied → 再升级"的多余往返。
 
-分类器失败（超时、解析错误、空响应）**不计入**熔断器。
+分类器失败（超时、解析错误、空响应）**不计入**熔断器。**但缓存命中的拒绝会计入**——完全相同的已拒动作重试（verdict cache 命中）同样增加连续与总计计数，因此重复提权尝试能真正触发熔断器并到达人工审批，而不是永远空转。
 
 ### 拒绝引导与诊断
 
 当一个动作被拒绝时，模型会被告知尝试更安全方案。若**没有更安全方案存在**，则指示其**停止重试并询问用户明确许可**——被拒绝的动作会一直失败，只有用户明确批准，后续尝试才可能通过（分类器经 `<recent_user_intent>` 权衡用户的最近显式意图）。
 
-分类器失败会写入 DSH 日志（而非 decisions 日志），带出解析后的路由（`provider/model`）、底层错误 code/message、以及模型原始输出。这让反复出现的 `classifier returned no verdict` 可诊断——常见原因是分类器继承了会话的重推理模型，其 chain-of-thought 吃掉了分类器 token 预算（或免费/慢网关超时）。
+每次分类器流失败（抛异常**或** `error` finish chunk）都会写入 DSH 日志（带解析后的路由、effort、底层错误 code/message、模型原始输出），并作为 `classifier-fail` 事件写入 `decisions.jsonl`——反复出现的 `classifier returned no verdict` 直接从审计记录即可诊断。若路由拒绝配置的 `reasoningEffort`（例如只支持 `off` 的路由收到 `low`），调用会先重试不传 effort 再判定失败。
 
 ### 裁决缓存
 
@@ -217,7 +223,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 所有决策写入 `~/.dsh/auto-mode/decisions.jsonl`（JSONL 格式，append-only，跨重启保留）。每条记录包含：
 
 - `at` — ISO 时间戳
-- `event` — decision / pre-execute-deny / pre-execute-allow / breaker / resume / boot
+- `event` — decision / pre-execute-deny / pre-execute-allow / pre-execute-fileop / pre-execute-fail-open / classifier-fail / breaker / resume / boot
 - `outcome` — allowed-once / rejected / cancelled
 - `tool` — 工具名
 - `tier` — deny / allow / classify:monitor / classify:cache / classify:fail / ...

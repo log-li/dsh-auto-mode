@@ -19,6 +19,22 @@ export interface Verdict {
     /** The classifier's one-sentence justification. */
     readonly reason: string;
 }
+/** A classifier stream failure (error finish or thrown), for diagnostics. */
+export interface ClassifyFailure {
+    /** Error message from the provider/adapter. */
+    readonly message: string;
+    /** Adapter error code when present (e.g. UNSUPPORTED_REASONING_EFFORT). */
+    readonly code?: string | null;
+}
+/** Per-attempt classifier failure info delivered to the durable audit log. */
+export interface ClassifyAttemptFailInfo {
+    readonly stage: 'fast-filter' | 'review';
+    /** The reasoning effort this attempt used, or null for the no-effort retry. */
+    readonly effort: string | null;
+    readonly failure: ClassifyFailure;
+    /** Raw text accumulated before the failure (usually empty). */
+    readonly raw: string;
+}
 /** Options for one classifier call. */
 export interface ClassifyOptions {
     /** System prompt (see prompt.ts). */
@@ -44,6 +60,12 @@ export interface ClassifyOptions {
         info: (m: string) => void;
         warn: (m: string) => void;
     };
+    /**
+     * Optional per-attempt failure callback for durable diagnostics (decisions.jsonl).
+     * Fired for EVERY failed stream attempt (error finish or thrown exception),
+     * including attempts that are retried without effort.
+     */
+    readonly onAttemptFail?: (info: ClassifyAttemptFailInfo) => void;
 }
 /**
  * Render a transcript as classifier input: the trailing `maxMessages`
@@ -98,7 +120,7 @@ export declare function parseVerdict(reply: string): Verdict | null;
 export declare function fastFilter(ctx: Context, actionSummary: string, provider: string, model: string, signal?: AbortSignal, timeoutMs?: number, reasoningEffort?: string, logger?: {
     info: (m: string) => void;
     warn: (m: string) => void;
-}): Promise<boolean | null>;
+}, onAttemptFail?: (info: ClassifyAttemptFailInfo) => void): Promise<boolean | null>;
 /**
  * Run one classifier call. Returns the verdict, or `null` when the call
  * failed, was aborted, was truncated, or produced an unparsable reply.

@@ -22,6 +22,24 @@ export interface Verdict {
   readonly reason: string;
 }
 
+/** A classifier stream failure (error finish or thrown), for diagnostics. */
+export interface ClassifyFailure {
+  /** Error message from the provider/adapter. */
+  readonly message: string;
+  /** Adapter error code when present (e.g. UNSUPPORTED_REASONING_EFFORT). */
+  readonly code?: string | null;
+}
+
+/** Per-attempt classifier failure info delivered to the durable audit log. */
+export interface ClassifyAttemptFailInfo {
+  readonly stage: 'fast-filter' | 'review';
+  /** The reasoning effort this attempt used, or null for the no-effort retry. */
+  readonly effort: string | null;
+  readonly failure: ClassifyFailure;
+  /** Raw text accumulated before the failure (usually empty). */
+  readonly raw: string;
+}
+
 /** Options for one classifier call. */
 export interface ClassifyOptions {
   /** System prompt (see prompt.ts). */
@@ -44,6 +62,12 @@ export interface ClassifyOptions {
   readonly reasoningEffort?: string;
   /** Optional logger for classifier root-cause diagnostics (route, errors, raw output). */
   readonly logger?: { info: (m: string) => void; warn: (m: string) => void };
+  /**
+   * Optional per-attempt failure callback for durable diagnostics (decisions.jsonl).
+   * Fired for EVERY failed stream attempt (error finish or thrown exception),
+   * including attempts that are retried without effort.
+   */
+  readonly onAttemptFail?: (info: ClassifyAttemptFailInfo) => void;
 }
 
 /**
@@ -76,28 +100,41 @@ interface StreamSpec {
   timeoutMs?: number;
   reasoningEffort?: string;
   logger?: { info: (m: string) => void; warn: (m: string) => void };
+  /** Which classifier stage owns this call (for durable diagnostics). */
+  stage?: 'fast-filter' | 'review';
+  /** Per-attempt failure callback (see ClassifyOptions.onAttemptFail). */
+  onAttemptFail?: (info: ClassifyAttemptFailInfo) => void;
 }
 
 /**
  * Shared streaming helper: runs one classifier call and accumulates text.
  *
- * If a reasoning effort was requested but the route does not support it
- * (dsh-llm throws `UNSUPPORTED_REASONING_EFFORT`), retry once without it so a
- * non-reasoning model is never broken by the effort config.
+ * If a reasoning effort was requested but the route does not support it, fall
+ * back to a no-effort retry. Two failure shapes must both retry:
+ *   1. `ctx.llm.stream` THROWS `UNSUPPORTED_REASONING_EFFORT` (config-time
+ *      validation in dsh-llm), or
+ *   2. the stream TERMINATES with an `error` finish chunk whose
+ *      `reason.failure.code === 'UNSUPPORTED_REASONING_EFFORT'` (dispatch-time
+ *      validation) — this shape does NOT throw, so the old catch-only fallback
+ *      never fired and every effort-carrying call failed deterministically.
+ * Every failed attempt (error finish or thrown) is reported through
+ * `spec.onAttemptFail` for the durable audit log.
  *
- * Returns `{ text, reasonKind }` on success, or `null` on a hard failure.
+ * Returns `{ text, reasonKind, failure }` on success or a terminal non-error
+ * finish, or `null` on a hard failure after all attempts.
  */
 async function streamTokens(
   ctx: Context,
   spec: StreamSpec,
-): Promise<{ text: string; reasonKind: string | null } | null> {
+): Promise<{ text: string; reasonKind: string | null; failure: ClassifyFailure | null } | null> {
   const attempts: Array<string | undefined> = spec.reasoningEffort
     ? [spec.reasoningEffort, undefined]
     : [undefined];
   for (const effort of attempts) {
+    let text = '';
+    let reasonKind: string | null = null;
+    let failure: ClassifyFailure | null = null;
     try {
-      let text = '';
-      let reasonKind: string | null = null;
       for await (const chunk of ctx.llm.stream({
         provider: spec.provider,
         model: spec.model,
@@ -114,9 +151,28 @@ async function streamTokens(
         ...(effort !== undefined ? { reasoningEffort: effort as any } : {}),
       })) {
         if (chunk.type === 'text-delta') text += chunk.text;
-        else if (chunk.type === 'finish') reasonKind = chunk.reason.kind;
+        else if (chunk.type === 'finish') {
+          reasonKind = chunk.reason?.kind ?? null;
+          const f = (chunk.reason as { failure?: { message?: string; code?: string } } | undefined)?.failure;
+          if (f?.message) failure = { message: f.message, code: f.code ?? null };
+        }
       }
-      return { text, reasonKind };
+      if (reasonKind === 'error') {
+        // Terminal error finish — dispatch/validation failure, not a throw.
+        if (failure) {
+          spec.logger?.warn(
+            `classifier stream failed (${spec.provider}/${spec.model})${effort ? ` effort=${effort}` : ''}: ${failure.message}${failure.code ? ` [${failure.code}]` : ''}`,
+          );
+          spec.onAttemptFail?.({
+            stage: spec.stage ?? 'review',
+            effort: effort ?? null,
+            failure,
+            raw: text,
+          });
+        }
+        if (effort !== undefined) continue; // retry without effort
+      }
+      return { text, reasonKind, failure };
     } catch (error) {
       if (
         (error as { code?: string } | null)?.code === 'UNSUPPORTED_REASONING_EFFORT' &&
@@ -125,9 +181,16 @@ async function streamTokens(
         continue; // route doesn't support the effort → retry without it
       }
       const code = (error as { code?: string } | null)?.code;
+      const message = String((error as { message?: string } | null)?.message ?? error);
       spec.logger?.warn(
-        `classifier stream failed (${spec.provider}/${spec.model}): ${String((error as { message?: string } | null)?.message ?? error)}${code ? ` [${code}]` : ''}`,
+        `classifier stream failed (${spec.provider}/${spec.model})${effort ? ` effort=${effort}` : ''}: ${message}${code ? ` [${code}]` : ''}`,
       );
+      spec.onAttemptFail?.({
+        stage: spec.stage ?? 'review',
+        effort: effort ?? null,
+        failure: { message, code: code ?? null },
+        raw: text,
+      });
       return null;
     }
   }
@@ -190,6 +253,11 @@ export function renderUserIntent(
     const m = messages[i];
     if (!m) continue; // noUncheckedIndexedAccess guard
     if (m.role !== 'user') continue;
+    // Only DIRECT human messages grant permission. Tool results, plugin/system
+    // injections, and model messages all carry role "user" but must NOT crowd
+    // out the user's actual instructions from the intent window.
+    const srcKind = (m.source as { kind?: string } | undefined)?.kind;
+    if (srcKind !== undefined && srcKind !== 'user') continue;
     const text = m.content.map(renderBlock).filter(Boolean).join(' ');
     if (text.trim()) userMsgs.unshift(`${m.role}: ${text}`);
   }
@@ -324,6 +392,7 @@ export async function fastFilter(
   timeoutMs?: number,
   reasoningEffort?: string,
   logger?: { info: (m: string) => void; warn: (m: string) => void },
+  onAttemptFail?: (info: ClassifyAttemptFailInfo) => void,
 ): Promise<boolean | null> {
   const res = await streamTokens(ctx, {
     provider,
@@ -337,6 +406,8 @@ export async function fastFilter(
     timeoutMs,
     reasoningEffort,
     logger,
+    stage: 'fast-filter',
+    onAttemptFail,
   });
   if (!res) return null;
   if (res.reasonKind === 'error' || res.reasonKind === 'aborted') return null;
@@ -370,6 +441,8 @@ export async function classify(
     timeoutMs: options.timeoutMs,
     reasoningEffort: options.reasoningEffort,
     logger: options.logger,
+    stage: 'review',
+    onAttemptFail: options.onAttemptFail,
   });
   if (!res) return null;
   if (res.reasonKind === 'error' || res.reasonKind === 'aborted') return null;
@@ -413,6 +486,7 @@ export async function classifyTwoStage(
     options.timeoutMs,
     options.reasoningEffort,
     options.logger,
+    options.onAttemptFail,
   );
   if (needsReview === false) {
     return { decision: 'allow', reason: 'one-token filter: routine/safe action' };

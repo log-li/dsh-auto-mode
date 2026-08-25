@@ -79,7 +79,11 @@
           maxTranscriptMessages: 40
           maxTokens: 2048
           temperature: 0
-          reasoningLevel: low
+          # 2026-08-25：默认改为 off（显式关闭分类器 reasoning）。
+          # 实测 opencode-go 路由不支持 low/medium/high（以 error-finish 拒绝）；
+          # off 与不传 effort 均 ~1-1.7s 返回、无 reasoning 块、不超时。
+          # 代码侧已加 error-finish 无 effort 回退，其他路由仍可用 low/high。
+          reasoningLevel: off
           askFallback: false
         rules:
           deny: ['$defaults']

@@ -44,11 +44,24 @@ import { VerdictCache } from './cache.js';
 import { Breaker } from './breaker.js';
 import { registerPreExecute, BREAKER_TRIPPED_HINT } from './pre-execute.js';
 import { appendDecision } from './log.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 export const name = 'dsh-automode';
 export { Config };
 
 export const inject = ['approval', 'llm'];
+
+/** Plugin version read from the package manifest at runtime (never hardcoded). */
+const PKG_VERSION: string = (() => {
+  try {
+    const p = fileURLToPath(new URL('../package.json', import.meta.url));
+    const raw = JSON.parse(readFileSync(p, 'utf8')) as { version?: unknown };
+    return typeof raw.version === 'string' ? raw.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 const AUTO_MODE_PRESET = 'auto-mode';
 const AUTO_SANDBOX = 'workspace-write';
@@ -231,6 +244,26 @@ async function decideAuto(
   }
   if (cached === 'DENY') {
     logger.info(`cache hit DENY → reject ${toolName}`);
+    // Cached classifier denies count toward the breaker too (see spec 2026-08-25):
+    // repeated identical escalation attempts must be able to trip it so the
+    // breaker-gated human-approval path for sandbox escalation becomes reachable.
+    const justTripped = breaker.countDeny(sid, config.breakerConsecutive, config.breakerTotal);
+    if (justTripped) {
+      logger.warn(`breaker tripped for session ${sid}`);
+      const b = breaker.get(sid);
+      appendDecision({
+        event: 'breaker',
+        action: 'tripped',
+        tool: toolName,
+        sessionId: sid,
+        detail: `consecutive=${b.consecutive} total=${b.total}`,
+      });
+      // Tell the model to escalate directly (skip try→error→escalate).
+      agent.inject(createUserMessage({
+        content: [{ type: 'text', text: BREAKER_TRIPPED_HINT }],
+        source: { kind: 'plugin', plugin: 'auto-mode' },
+      }));
+    }
     return 'rejected';
   }
 
@@ -271,6 +304,17 @@ async function decideAuto(
       timeoutMs: config.timeoutMs,
       reasoningEffort: config.classifier.reasoningLevel,
       logger,
+      onAttemptFail: (info) => {
+        appendDecision({
+          event: 'classifier-fail',
+          tool: toolName,
+          sessionId: sid,
+          stage: info.stage,
+          effort: info.effort ?? '',
+          route: `${route.provider}/${route.model}`,
+          detail: `${info.failure.message}${info.failure.code ? ` [${info.failure.code}]` : ''}${info.raw ? ` raw=${JSON.stringify(info.raw.slice(0, 120))}` : ''}`,
+        });
+      },
     },
     `${toolName}${reason ? ` (${reason})` : ''}`,
   );
@@ -442,6 +486,6 @@ export function apply(ctx: Context, rawConfig: unknown): void {
   });
 
   // --- 5. Boot log ---
-  appendDecision({ event: 'boot', tool: '-', detail: `dsh-automode v0.6.0 active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})` });
-  logger.info(`dsh-automode v0.6.0 active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})`);
+  appendDecision({ event: 'boot', tool: '-', detail: `dsh-automode v${PKG_VERSION} active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})` });
+  logger.info(`dsh-automode v${PKG_VERSION} active (failClosed=${config.failClosed}, preExecute=${config.preExecuteGate})`);
 }

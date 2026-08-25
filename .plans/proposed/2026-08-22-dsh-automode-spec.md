@@ -1,18 +1,29 @@
 Status: implemented
 
-# Fork Nuo-cl/dsh-auto-mode 并重构为 dsh-automode
+# dsh-automode：自主审批插件（借鉴 Nuo-cl/dsh-auto-mode 的设计模式，独立实现）
 
 > 本文档是 dsh-automode 的**当前设计与实现规格**。早前的 `proposed / 待实现 / 审查发现 / 实现确认` 分层已全部落地并合入本文；v0.5.0 审查发现的 7 个 bug、CC 式分类器缺口、熔断器复位缺陷、模型引导改进均已实现，不再单独保留历史 bug 清单。
+>
+> 2026-08-25 修订：本文档原题「Fork Nuo-cl/dsh-auto-mode 并重构为 dsh-automode」。本插件**并非 fork**——以自身设计为主，借鉴了 Nuo-cl/dsh-auto-mode 与 pi-automode 的思路与模式独立实现；对二者的贡献见下方「致谢与参考」。
 
 ## 核心立场
 
-转 TypeScript（与 DSH 生态一致），我们的逻辑为基础，Nuo-cl 和 pi-automode 的代码尽可能直接复用（转写为 TS），减少重写。
+转 TypeScript（与 DSH 生态一致），以**自身设计**为逻辑基础，**参考** Nuo-cl/dsh-auto-mode 与 pi-automode 的决策链、预执行门、熔断器、两阶段分类器等设计模式（借鉴思路，非代码复用），独立实现、减少重写。
+
+## 致谢与参考
+
+本插件为独立实现，**未 fork 任何上游代码库**。设计上借鉴了以下项目，特此致谢：
+
+- **Nuo-cl/dsh-auto-mode**：auto mode 概念、预执行门（pre-execute gate）、裁决缓存、熔断器、deny/allow 频带、CC 式拒绝引导等设计模式。
+- **pi-automode**：两阶段分类器、`allowInsideWorkingDirectory`、`$defaults` 规则机制等设计模式。
+
+对外说明建议措辞：`Inspired by Nuo-cl/dsh-auto-mode and pi-automode`。
 
 ## 共识（grill 产出）
 
 | 决策 | 选择 |
 |---|---|
-| 代码库 | Nuo-cl TypeScript 为基础 → merge 到 log-li/dsh-automode |
+| 代码库 | 独立实现 dsh-automode；借鉴 Nuo-cl / pi-automode 的设计模式（见「致谢与参考」） |
 | npm 名 | `dsh-automode`（无连字符） |
 | peerDeps | 精简到最少必需 |
 | 语言 | TypeScript |
@@ -64,7 +75,7 @@ src/
 ## 关键行为（已实现）
 
 ### 两阶段分类器
-- `fastFilter`（one-token 预筛）：512 token 预算 + **独立 0/1 数字解析**，避免 reasoning 模型被 token 预算饿死；传入 `classifier.reasoningLevel` 作为 `reasoningEffort`；若路由不支持 effort（dsh-llm 抛 `UNSUPPORTED_REASONING_EFFORT`）则**安全回退为不传**（`streamTokens` 统一处理）。
+- `fastFilter`（one-token 预筛）：512 token 预算 + **独立 0/1 数字解析**，避免 reasoning 模型被 token 预算饿死；传入 `classifier.reasoningLevel` 作为 `reasoningEffort`；若路由不支持 effort（dsh-llm 抛 `UNSUPPORTED_REASONING_EFFORT`，或流以 `finish {kind:'error'}` 终结且 `reason.failure.code === UNSUPPORTED_REASONING_EFFORT`）则**安全回退为不传**（`streamTokens` 统一处理，抛异常与 error-finish 两条路径都重试）。
 - `classify`（结构化裁决）：鲁棒解析 JSON verdict（allow / ask / reject）；失败返回 null → 调用方按 `failClosed` 处理。
 
 ### 熔断器
@@ -81,6 +92,7 @@ src/
 
 ### 分类器诊断
 - `classifier.ts` 把 resolved `provider/model`、底层错误 code/message、以及 `raw` 模型输出写入 **DSH 日志**（不进 decisions.jsonl），用于定位 `classifier returned no verdict` 根因。
+- **2026-08-25 增强**：分类器流失败（error-finish 或抛异常）除 DSH 日志外，**同时写入 `decisions.jsonl` 的 `classifier-fail` 事件**（含 `stage` / `effort` / `route` / 错误 message+code / raw 摘要），使「no verdict」可从审计记录直接复盘，不再依赖 DSH 进程内日志。
 
 ### 预执行门作用域
 - 仅在 `auto-mode` 会话生效；非 auto preset（read-only / workspace-write / danger-full-access）一律放行，不与用户所选沙箱/审批预设冲突。
@@ -104,4 +116,33 @@ src/
 - **根因**：pre-execute 门用的是 `session.cwd`，但 DSH `Session` **没有 `cwd` 访问器**——cwd 在 `session.header.cwd`（`SessionHeader`）。`session.cwd` 恒为 `undefined` → `trustRoots` 永远不会把会话工作区加入 trust roots → `allowInsideWorkingDirectory` 从不把工作区内文件操作当作 in-tree → 全被送进分类器。
 - **修复**：`src/pre-execute.ts` 将 `trustRoots(config.allowPaths, session.cwd)` 改为 `session.header?.cwd`。
 - **🔎 待诊断——越区写入偶发被 fail-open 放行**：某次 E2E 中，写 `~/Documents`（越区）得到裸 sandbox 拒绝，而非分类器裁决（熔断器未跳闸），疑似分类器分支抛错被 catch 兜底 fail-open，或 `collectPaths` 未识别为越区。**已加诊断**：pre-execute 门新增 `pre-execute-fileop`（记录 `esc/targets/inTree/outOfTree/breaker/cwd`）与 `pre-execute-fail-open`（记录错误 message+stack）到 decisions.jsonl，用于下次 auto 模式复现时定位根因。**防御**：`resolveRoute` 改用 `agent.options?.provider/model`，避免 `agent.options` 缺失时抛错导致 fail-open。
+
+## 分类器 effort 回退缺陷修复（2026-08-25 补记）
+
+- **现象**：auto-mode 会话内所有需要 LLM 分类的动作连续 `classifier returned no verdict` → failClosed 拒绝（08-23 10:15 起反复出现；08-25 17:24–17:25 一次会话内 4 次，主模型同一路由 opencode-go/deepseek-v4-flash 全程正常）。
+- **诊断证据**（cldiag 动态插件复刻分类器调用）：
+  - 不带 `reasoningEffort`：成功（~900ms，finish=stop，返回 `"0"`）；
+  - 带 `reasoningEffort: 'low'`：**0ms 失败**，流以 `finish {kind:'error', reason:{kind:'error', failure:{message:'provider "opencode-go" model "deepseek-v4-flash" does not support reasoning effort "low"', code:'UNSUPPORTED_REASONING_EFFORT'}}}` 终结。
+- **根因**：dsh-llm 对「模型不支持 effort」有两种失败形态——配置解析阶段**抛** `UNSUPPORTED_REASONING_EFFORT`（插件 `streamTokens` 的 catch 已处理，重试不传 effort），以及流式调度阶段**以 error-finish chunk 终结**（不抛异常）。后者绕过了插件的 catch 分支：`streamTokens` 直接把 `{text:'', reasonKind:'error'}` 返回，`classify/fastFilter` 见 `reasonKind==='error'` 返回 null，重试逻辑永不触发。配置 `reasoningLevel: low` 让每次调用 100% 命中该路径。
+- **修复（已实现）**：
+  1. `streamTokens`：**error-finish 视为可重试失败**——凡 `reasonKind==='error'` 且本次尝试带了 effort，`continue` 到下一次无 effort 尝试（与抛异常路径同语义）；同时把 error-finish 也写入 DSH 日志 warn（此前该路径完全静默）。
+  2. **详细错误日志**：`ClassifyOptions` 新增 `onAttemptFail` 回调，每次流失败（error-finish 或抛异常）回调 `{stage, effort, failure:{message, code}, raw}`；pre-execute 门与 approval 瀑布两个调用点把它落进 `decisions.jsonl` 的 `classifier-fail` 事件（`event/stage/effort/route/detail`）。
+- **验证**：cldiag 仿真「effort-low 失败 → 无 effort 重试」对真实 provider 成功返回 verdict `"0"`；`npm run build` + `npm test` 通过。运行中的 dsh 进程需重启后加载新 lib 生效。
+- **遗留建议 → 已决定（2026-08-25）**：默认 `classifier.reasoningLevel` 改为 **`off`**（显式关闭分类器 reasoning）。实测（cldiag 复刻，opencode-go/deepseek-v4-flash，fast512 与 full2048 两档）：`off` 与不传 effort 均 **~1–1.7s 返回、无 reasoning 块、不超时**——「不给 effort 会导致过度思考/超时」不成立；`off` 同时省掉每次的无效首试。代码侧 error-finish 回退仍保留，其他路由可继续用 low/medium/high。
+
+## 提权人工弹窗触发策略与 breaker 计数修复（2026-08-25 补记）
+
+- **用户定稿策略**：普通操作由分类器自动裁决；**沙箱提权（sandbox_permissions）的「人工弹窗」只在 breaker 跳闸后出现**——即 3 次连续分类器拒绝或会话累计 20 次拒绝之后，提权请求强制走人工审批（弹窗由用户拍板），而非每次提权都弹窗。分类器在跳闸前仍按提示词裁决提权（自我扩权 → 拒绝）。
+- **暴露的 bug**：重复提权场景下 breaker 根本跳不了闸——**裁决缓存命中的 DENY（`a prior identical action was judged unsafe`）不计入 breaker**（连续与总计都不计），且中间任何一次 allow 会清零连续计数。观测会话（2026-08-25 09:54–09:56）中模型连续 4 次提权被拒，breaker 从未触发，人工弹窗永远不来，模型只能空转。
+- **修复**：`pre-execute.ts` 与 `index.ts` 的 **cache-DENY 分支同样调用 `breaker.countDeny`**（计入连续与总计），跳闸时与普通 reject 分支一致：写 `breaker` 事件、注入 `BREAKER_TRIPPED_HINT`（提示模型直接请求提权 → 人工审批）。修复后上述场景第 3 次缓存/裁决拒绝即跳闸 → 提权进入人工弹窗。
+- **验证**：`npm run build` + `npm test` 通过；重启后可在 auto 会话复现「重复提权 3 次 → 弹窗」。
+
+## 风险导向分类 + 用户意图上下文修复（2026-08-25 补记）
+
+- **用户定稿**：**明显无危险、可逆的操作应自动放行**（例：编辑 git 仓库内的 skill 文件）。分类器应**按动作实际风险**裁决（可逆性 + blast radius + 用户对齐），不再因「请求提权」这一机制本身一刀切拒绝。
+- **诊断结论**（2026-08-25 实锤）：该场景被拒的根因不是 deny 正则（未命中），而是 `prompt.ts` 把「agent 自我扩权」列进不可覆盖 danger 清单——分类器从不评估动作本身（git 可回退、低风险）就被「提权」信号否决；叠加 `renderUserIntent` bug（工具结果/系统注入 role=user 挤占最近 6 条窗口，用户授权原话读不到，只见到模型 justification 自称授权）。
+- **改动（已实现）**：
+  1. `prompt.ts`：UNSAFE 清单**去掉「自我扩权」一刀切**，改为按动作风险（保留：不可逆破坏/泄密/持久化/削弱安全/共享生产外部状态）；**新增**「READ-ONLY and REVERSIBLE operations are ALLOWED（GET/HEAD、检视、状态查询、可撤销的本地改动、git 跟踪文件）」+「提权本身不是危险——评估它启用的动作；低风险可逆 + 用户对齐可放行（如编辑工作区外的 git 仓库 skill 文件）；为真危险动作提权仍禁止」。
+  2. `classifier.ts` `renderUserIntent`：**只保留 `source.kind === 'user'` 的人类消息**（排除 tool/plugin/system/model 注入），保证用户授权原话稳定进入意图窗口。
+- **验证**：`npm run build` + `npm test` 通过；提示词级场景测试（真实 provider）断言：skill 编辑+提权+git 可回退+用户授权 → allow；GET/只读 → allow；泄密/持久化/生产变更 → reject。重启后 E2E 复测。
 
