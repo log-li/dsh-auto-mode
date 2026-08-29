@@ -60,9 +60,25 @@ export function bashCommandOf(args: unknown): string {
   return '';
 }
 
-/** Detect shell metacharacters that indicate a composite command. */
+/** Detect shell metacharacters that indicate a composite command.
+ * Quote-aware: control characters inside quotes are literal — a quoted
+ * filename like "GRF 2026 (copy).docx" is NOT a subshell — and only an
+ * unquoted `; & | > \` $ ( )` marks the command as composite. */
 export function isCompositeShell(text: string): boolean {
-  return /[;&|>`$()]/.test(text);
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] ?? '';
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/[;&|>`$()]/.test(ch)) return true;
+  }
+  return false;
 }
 
 /** Quote-aware shell tokenization (no metachar expansion, no env substitution). */

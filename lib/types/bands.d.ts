@@ -22,7 +22,10 @@ export declare function compileGlob(pattern: string): RegExp;
 export declare function matchAllow(globs: RegExp[], text: string): string | null;
 /** Extract the command field from tool arguments (string or object). */
 export declare function bashCommandOf(args: unknown): string;
-/** Detect shell metacharacters that indicate a composite command. */
+/** Detect shell metacharacters that indicate a composite command.
+ * Quote-aware: control characters inside quotes are literal — a quoted
+ * filename like "GRF 2026 (copy).docx" is NOT a subshell — and only an
+ * unquoted `; & | > \` $ ( )` marks the command as composite. */
 export declare function isCompositeShell(text: string): boolean;
 /** Quote-aware shell tokenization (no metachar expansion, no env substitution). */
 export declare function tokenizeShell(cmd: string): string[];

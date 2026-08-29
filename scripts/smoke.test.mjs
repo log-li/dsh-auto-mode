@@ -323,6 +323,11 @@ test('cp/mv destination is the last positional', () => {
   );
   assert.deepEqual(bashWriteDestinations('cp -r src /Users/x/OneDrive/Proposal/'), ['/Users/x/OneDrive/Proposal/']);
   assert.deepEqual(bashWriteDestinations('mv a b /Users/x/OneDrive/Proposal/f'), ['/Users/x/OneDrive/Proposal/f']);
+  // Parens in a QUOTED filename are literal, not a subshell → destination extracted
+  assert.deepEqual(
+    bashWriteDestinations('cp "/src/GRF 2026 Methods - Ver 2.0 (copy).docx" "/Users/x/OneDrive/Proposal/GRF 2026 Methods - Ver 2.0 (copy).docx"'),
+    ['/Users/x/OneDrive/Proposal/GRF 2026 Methods - Ver 2.0 (copy).docx'],
+  );
 });
 test('cp -t / --target-directory form', () => {
   assert.deepEqual(bashWriteDestinations('cp -t /Users/x/OneDrive/Proposal a b'), ['/Users/x/OneDrive/Proposal']);

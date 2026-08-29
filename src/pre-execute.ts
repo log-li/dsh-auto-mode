@@ -262,11 +262,14 @@ export function registerPreExecute(
       const bashTargets = isFileToolCall ? [] : bashWriteDestinations(commandText);
       // Diagnose why a file/bash op is (or isn't) classified: record the gate state.
       if (isFileToolCall || (commandText && isEscalation)) {
+        const argsKeys = exec.arguments && typeof exec.arguments === 'object'
+          ? Object.keys(exec.arguments as Record<string, unknown>).join(',')
+          : typeof exec.arguments;
         appendDecision({
           event: isFileToolCall ? 'pre-execute-fileop' : 'pre-execute-bashop',
           tool: toolName,
           sessionId: sid,
-          detail: `esc=${isEscalation} ${isFileToolCall ? `targets=${JSON.stringify(targetPaths)}` : `bashDests=${JSON.stringify(bashTargets)}`} inTree=${inTrusted} outOfTree=${isOutOfTreeFileOp} breaker=${breaker.isTripped(sid)} cwd=${session.header?.cwd ?? '?'}`,
+          detail: `esc=${isEscalation} ${isFileToolCall ? `targets=${JSON.stringify(targetPaths)}` : `bashDests=${JSON.stringify(bashTargets)}`} inTree=${inTrusted} outOfTree=${isOutOfTreeFileOp} breaker=${breaker.isTripped(sid)} cwd=${session.header?.cwd ?? '?'} argsKeys=${argsKeys} cmdHead=${JSON.stringify(commandText.slice(0, 150))}`,
         });
       }
       if ((isEscalation || isOutOfTreeFileOp) && !breaker.isTripped(sid)) {
