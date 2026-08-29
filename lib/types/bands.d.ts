@@ -24,6 +24,15 @@ export declare function matchAllow(globs: RegExp[], text: string): string | null
 export declare function bashCommandOf(args: unknown): string;
 /** Detect shell metacharacters that indicate a composite command. */
 export declare function isCompositeShell(text: string): boolean;
+/** Quote-aware shell tokenization (no metachar expansion, no env substitution). */
+export declare function tokenizeShell(cmd: string): string[];
+/**
+ * For a NON-composite bash command, return the destination path(s) it writes
+ * into, or `[]` when the command is not a recognized file-writing command or
+ * has no explicit destination. The destination is only ever the *target* of
+ * the write; sources and unrelated path tokens are ignored.
+ */
+export declare function bashWriteDestinations(cmd: string): string[];
 /** Whether `text` contains a permanent-deletion command. */
 export declare function matchDeletion(text: string): string | null;
 /** Whether `text` is a read-only tool name. */

@@ -148,7 +148,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `deny` | 内置列表 | 正则模式，硬拒绝。首个匹配生效。 |
 | `allow` | 内置列表 | 前缀 glob，不调用 LLM 放行。 |
 | `readOnlyTools` | read, glob, grep, list, search | 默认放行的工具（除非命中 deny）。 |
-| `allowPaths` | `[]` | 全信任的外部目录（curated）。 |
+| `allowPaths` | `[]` | 全信任的外部目录（curated）。目标落在这些目录内的文件操作跳过分类器；bash 写命令（cp/mv/rsync/ditto/install/tar -x -C/unzip -d/curl -o/wget -O/git clone）的**目标**解析后落在其中同样跳过。真实路径（symlink resolve）前缀匹配。随插件发布默认保持通用——个人目录在 profile 里配置（见下）。 |
 | `allowInsideWorkingDirectory` | `true` | 工作区内文件操作不经分类器。 |
 | `classifier.provider` / `classifier.model` | `''`（跟随会话） | 覆盖分类器 LLM 路由。解析顺序：`classifier.{provider,model}` → 会话当前模型（request header）→ agent 配置模型。为空时分类器用会话正在使用的模型。 |
 | `classifier.reasoningLevel` | `off` | 传给分类器的推理强度（`reasoningEffort`）：`off` 关闭推理；`low/medium/high` 开启。若路由拒绝该 effort（抛 `UNSUPPORTED_REASONING_EFFORT` **或** 以 `error` finish chunk 终结），调用会重试不传 effort。默认为 `off`：已在 opencode-go 路由实测 ~1–1.7s 返回、无 reasoning 块、不超时。 |
@@ -162,6 +162,21 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `maxArgsChars` | `4000` | 裁决缓存 key 用的命令签名字符预算。 |
 | `breakerConsecutive` | `3` | 连续分类器 DENY 触发熔断。 |
 | `breakerTotal` | `20` | 总分类器 DENY 触发熔断。 |
+
+### 信任额外目录（`allowPaths`）
+
+`allowPaths` 是用户 curated 的**全信任**列表：目标解析后落在其中任一目录内的文件操作与 bash 写命令，完全跳过安全分类器（日志记为 `pre-execute-allow` / `curated allowPath`）。随插件发布的默认只保留通用 `/tmp/`——**个人目录改在 profile 的 `cordis.patch.yml` 配置**。loader patch 会整体替换目标行的 `config`，所以下面的最小覆写只设 `allowPaths`（其余字段回退到插件代码默认值）：
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml
+- id: auto-mode
+  config:
+    allowPaths:
+      - /tmp/
+      - /Users/<you>/Library/CloudStorage/OneDrive-<tenant>/Projects/<proj>/Proposal/
+```
+
+只有被识别的写命令才会被信任（删除类命令 `rm`/`trash` 绝不会被白名单放行）；路径在 symlink 解析后匹配，`/Users/<you>/OneDrive - …` 软链与真实 `Library/CloudStorage/…` 路径都可用。下面的裁决缓存修复仍然重要：即便没有 allowPath，你一旦显式授权某个动作，分类器也会带着你的意图重跑，而不是回放旧的缓存拒绝。
 
 ### 权限预设图标
 
@@ -218,14 +233,14 @@ routine 类别（install/build/test/文件编辑/git add/commit/status）只是*
 
 ### 裁决缓存
 
-分类器 verdict 按会话的 tool + 命令签名缓存。若同一动作再次请求（例如 approval 瀑布在一次 pre-execute 分类之后），缓存 verdict 直接复用，不再二次 LLM 调用。缓存条目 5 分钟后过期。
+分类器 verdict 按会话的 **tool + 命令 + 用户意图** 签名缓存。用户最近直接指示会被 hash 进签名，因此一次新的显式授权（新的人类消息）会使旧的缓存 verdict 失效、分类器带着新意图重跑——**用户的授权绝不会被缓存的 `DENY` 吞掉**。在同一意图窗口内，重复动作仍会复用缓存 verdict，不再二次 LLM 调用。缓存条目 5 分钟后过期。
 
 ## 日志
 
 所有决策写入 `~/.dsh/auto-mode/decisions.jsonl`（JSONL 格式，append-only，跨重启保留）。每条记录包含：
 
 - `at` — ISO 时间戳
-- `event` — decision / pre-execute-deny / pre-execute-allow / pre-execute-fileop / pre-execute-fail-open / classifier-fail / breaker / resume / boot
+- `event` — decision / pre-execute-deny / pre-execute-allow / pre-execute-fileop / pre-execute-bashop / pre-execute-fail-open / classifier-fail / breaker / resume / boot
 - `outcome` — allowed-once / rejected / cancelled
 - `tool` — 工具名
 - `tier` — deny / allow / classify:monitor / classify:cache / classify:fail / ...

@@ -179,3 +179,22 @@ src/
 - **版本**：0.7.0 → **0.8.0**（行为变更：移除 ask 态、deny 提示增强、justification 透传）。
 - **验证**：`npm run build` + `npm test`；提示词级场景测试断言：常规 → allow；危险 → reject；**模型输出 ask → 归一为 reject**；越区文件操作带 justification → 分类器 prompt 可见。重启 dsh 后 E2E。
 
+## 裁决缓存意图感知 + allowPaths 覆盖 bash 写命令（2026-08-29 补记）
+
+### 背景（实测复现）
+向 OneDrive（`~/Library/CloudStorage/OneDrive-TheHongKongPolytechnicUniversity/Projects/GRF 2026/Proposal/`）导出文件时：
+- `08:47:29` 分类器判 DENY（`Writing to an external OneDrive path outside the working tree modifies shared/external state...`，tool=bash，带 danger-full-access 提权）；
+- `08:48:38` 同命令重试命中**缓存 DENY**（`a prior identical action was judged unsafe`）——用户已显式授权，仍被旧缓存拦截。
+
+### 问题 1（bug）：裁决缓存不感知用户授权意图
+- **根因**：`pre-execute.ts` 的缓存检查（`VerdictCache.sig`）发生在 classifier 之前，且签名**不含用户意图**——`cache.ts::sig` 只基于 `tool + 命令前 maxArgsChars 字符小写`。用户授权后命令签名与之前被拒的完全相同 → 命中缓存 DENY → classifier 根本没被重新调用（classifier 经 `<recent_user_intent>` 本可读到授权）。
+- **修复（已实现）**：`cache.ts` 新增 `hashString(text)`（djb2 → base36）；`VerdictCache.sig(toolName, reason, args, maxChars, intentHash?)` 在提供 `intentHash` 时追加 `|intent:<hash>`。`pre-execute.ts` 与 `index.ts`（approval 路径）把 `renderUserIntent(...)` **提前到缓存检查之前**，对最近直接人类消息（`source.kind==='user'`）渲染结果做 hash 并入签名；新用户授权消息进入意图窗口 → hash 变化 → 缓存 miss → classifier 以新意图重跑。工具结果/系统注入（role=user 但非 human）被 `renderUserIntent` 过滤，不破坏缓存；同一意图窗口内的重复命令仍命中缓存。
+- **验证**：`npm test`（cache 签名 + 意图 hash 用例）；`npm run build` + `npm run typecheck`。
+
+### 问题 2（功能）：OneDrive allowPaths 白名单
+- **关键事实（与 handoff 预判不同）**：被拒动作是 `tool=bash`（cp），而 `pre-execute.ts` 的 curated allowPath 分支（line 274-282）**只对文件工具生效**（`targetPaths` 仅由 `collectPaths` 填充，bash 为空数组）——仅把 OneDrive 加入 `allowPaths` 对 `bash cp` 无效。
+- **修复（已实现）**：`bands.ts` 新增 `tokenizeShell` + `bashWriteDestinations(cmd)`——对**非复合** bash 命令识别写命令族（`cp/mv/rsync/ditto/install/tar -x(-C)/unzip(-d)/unar(-d)/curl -o/wget -O/git clone`），提取目标目录/文件路径；`pre-execute.ts` 的 curated allowPath 判定改为「文件工具用 `targetPaths`，bash 用 `bashWriteDestinations` 的结果」，任一路径经 `isInsideTrusted`（真实 symlink-resolve 前缀匹配）命中 allowPath → `pre-execute-allow`（`curated allowPath`），不经过 classifier。
+- **安全边界**：仅限白名单写命令 + 目标在用户 curated allowPath 内 + deny 频带仍最先执行（`/etc`/`mv|trash` 系统目录、`.ssh/`/`.env`/`credentials` 等仍硬拒绝）；删除类命令（`rm`）不在写命令白名单，不被放行；复合命令/重定向（`>`）不进此分支（回退 classifier）。**权衡**：allowPath 是用户显式声明的全信任目录，写入其中是声明意图；误放风险限于「把文件写进用户自己信任的目录」。
+- **配置归属（重要，不回退 9bb483c）**：**不把个人 OneDrive 路径写进 `DEFAULT_ALLOW_PATHS` / 插件默认 `cordis.patch.yml`**（9bb483c 已移除个人路径，默认保持通用、仅 `/tmp/`）。OneDrive 路径改由**用户 profile 覆盖**：`~/.dsh/profiles/web/cordis.patch.yml` 中 `- id: auto-mode` 覆写 `config.allowPaths`（loader patch 语义：`config` 整体替换；因其余字段与代码默认完全一致，只覆写 `allowPaths` 即可，`/tmp/` 一并保留）。README 补充该配置方法。
+- **验证**：`npm test`（bashWriteDestinations 用例：cp/mv/-t/rsync/tar -C/curl -o/git clone/非写命令/复合命令）；node 脚本断言「最小 profile 覆写（仅 allowPaths）解析出的完整 config 与 bundle 默认一致——**唯一差异**：bundle 的 `trash|mv` 系统目录 deny 模式缺 `[:…]` 里的 `:` 分支，代码默认更严格，属 fail-closed（更安全）方向，可接受」；`npm run build`。重启 dsh 后 E2E：`cp x.docx .../Proposal/` 应落 `pre-execute-allow (curated allowPath)`。
+

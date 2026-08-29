@@ -40,7 +40,7 @@ import {
   resolveRoute,
   truncateToChars,
 } from './classifier.js';
-import { VerdictCache } from './cache.js';
+import { VerdictCache, hashString } from './cache.js';
 import { Breaker } from './breaker.js';
 import { registerPreExecute, BREAKER_TRIPPED_HINT } from './pre-execute.js';
 import { appendDecision } from './log.js';
@@ -183,8 +183,15 @@ async function decideAuto(
     return 'allowed-once';
   }
 
+  // The user's recent DIRECT instructions are part of the verdict key (the
+  // classifier weighs them), so a new explicit authorization must invalidate
+  // any cached DENY for this action.
+  const derived = agent.session.deriveMessages();
+  const userIntent = renderUserIntent(derived, config.classifier.maxIntentMessages);
+  const intentHash = hashString(userIntent);
+
   // 5. Cache hit (pre-execute already classified)
-  const sig = VerdictCache.sig(toolName, reason ?? '', args, config.maxArgsChars);
+  const sig = VerdictCache.sig(toolName, reason ?? '', args, config.maxArgsChars, intentHash);
   const sid = String(agent.session.id ?? '?');
   const cached = cache.get(sid, sig);
   if (cached === 'ALLOW') {
@@ -230,12 +237,10 @@ async function decideAuto(
   }
 
   const environmentFacts = expandDefaults(config.rules.environment, 'environment');
-  const derived = agent.session.deriveMessages();
   const transcript = truncateToChars(
     renderTranscript(derived, config.classifier.maxTranscriptMessages),
     config.classifyContextChars,
   );
-  const userIntent = renderUserIntent(derived, config.classifier.maxIntentMessages);
   const input = promptInputOf({ toolName, reason, userIntent }, softAllowRules, softDenyRules, environmentFacts);
 
   logger.info(`classifying ${toolName}${reason ? ` (${reason})` : ''} via ${route.provider}/${route.model}`);

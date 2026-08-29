@@ -10,6 +10,8 @@ import { parseVerdict, renderTranscript } from '../lib/classifier.js';
 import { buildSystemPrompt, buildUserMessage } from '../lib/prompt.js';
 import { isAuto, writeAutoMode } from '../lib/index.js';
 import { Breaker } from '../lib/breaker.js';
+import { VerdictCache, hashString } from '../lib/cache.js';
+import { tokenizeShell, bashWriteDestinations } from '../lib/bands.js';
 
 let passed = 0;
 function test(name, fn) {
@@ -287,6 +289,76 @@ test('resume resets counters and clears tripped', () => {
   b.resume(sid);
   assert.deepEqual(b.get(sid), { consecutive: 0, total: 0, tripped: false });
   assert.equal(b.isTripped(sid), false);
+});
+
+console.log('cache.js (intent-aware verdict cache)');
+test('hashString is deterministic', () => {
+  assert.equal(hashString('allow writing to OneDrive'), hashString('allow writing to OneDrive'));
+  assert.equal(hashString(''), hashString(''));
+  assert.notEqual(hashString('allow'), hashString('deny'));
+});
+test('sig appends intent hash and differs when intent changes', () => {
+  const base = VerdictCache.sig('bash', 'escalate', { command: 'cp a.docx /dest' }, 200);
+  const withA = VerdictCache.sig('bash', 'escalate', { command: 'cp a.docx /dest' }, 200, hashString('allow OneDrive'));
+  const withB = VerdictCache.sig('bash', 'escalate', { command: 'cp a.docx /dest' }, 200, hashString('deny OneDrive'));
+  assert.notEqual(withA, withB);          // different intent → different key
+  assert.notEqual(withA, base);           // intent-hashed differs from legacy
+  assert.ok(withA.startsWith(`${base}|intent:`));
+});
+test('cache get/put respects the intent-hashed signature', () => {
+  const c = new VerdictCache();
+  const sid = 's-intent';
+  const s1 = VerdictCache.sig('bash', 'r', { command: 'cp a /d' }, 200, hashString('intent1'));
+  const s2 = VerdictCache.sig('bash', 'r', { command: 'cp a /d' }, 200, hashString('intent2'));
+  c.put(sid, s1, 'DENY');
+  assert.equal(c.get(sid, s1), 'DENY');
+  assert.equal(c.get(sid, s2), null); // new intent → cache miss (user grant re-classifies)
+});
+
+console.log('bands.js (bashWriteDestinations)');
+test('cp/mv destination is the last positional', () => {
+  assert.deepEqual(
+    bashWriteDestinations('cp file.docx "/Users/x/OneDrive/Proposal/GRF 2026 a.docx"'),
+    ['/Users/x/OneDrive/Proposal/GRF 2026 a.docx'],
+  );
+  assert.deepEqual(bashWriteDestinations('cp -r src /Users/x/OneDrive/Proposal/'), ['/Users/x/OneDrive/Proposal/']);
+  assert.deepEqual(bashWriteDestinations('mv a b /Users/x/OneDrive/Proposal/f'), ['/Users/x/OneDrive/Proposal/f']);
+});
+test('cp -t / --target-directory form', () => {
+  assert.deepEqual(bashWriteDestinations('cp -t /Users/x/OneDrive/Proposal a b'), ['/Users/x/OneDrive/Proposal']);
+  assert.deepEqual(bashWriteDestinations('cp --target-directory=/Users/x/OneDrive/Proposal a b'), ['/Users/x/OneDrive/Proposal']);
+});
+test('rsync/install destination', () => {
+  assert.deepEqual(bashWriteDestinations('rsync -av --delete /src/ /Users/x/OneDrive/Proposal/'), ['/Users/x/OneDrive/Proposal/']);
+  assert.deepEqual(bashWriteDestinations('install -m 755 src /Users/x/OneDrive/Proposal/bin'), ['/Users/x/OneDrive/Proposal/bin']);
+});
+test('tar/unzip extract target (-C / -d)', () => {
+  assert.deepEqual(bashWriteDestinations('tar -xzf x.tar.gz -C /Users/x/OneDrive/Proposal/'), ['/Users/x/OneDrive/Proposal/']);
+  assert.deepEqual(bashWriteDestinations('unzip x.zip -d /Users/x/OneDrive/Proposal/'), ['/Users/x/OneDrive/Proposal/']);
+  assert.deepEqual(bashWriteDestinations('tar xf x.tar'), []); // extracts to cwd, not an explicit dest
+});
+test('curl -o / wget -O target', () => {
+  assert.deepEqual(bashWriteDestinations('curl -o /Users/x/OneDrive/Proposal/f https://example.com/a'), ['/Users/x/OneDrive/Proposal/f']);
+  assert.deepEqual(bashWriteDestinations('wget -O /Users/x/OneDrive/Proposal/f https://example.com/a'), ['/Users/x/OneDrive/Proposal/f']);
+});
+test('git clone target dir', () => {
+  assert.deepEqual(
+    bashWriteDestinations('git clone https://github.com/x/y /Users/x/OneDrive/Proposal/repo'),
+    ['/Users/x/OneDrive/Proposal/repo'],
+  );
+  assert.deepEqual(bashWriteDestinations('git clone https://github.com/x/y'), []);
+});
+test('non-write commands and deletion are NOT allowlisted', () => {
+  assert.deepEqual(bashWriteDestinations('ls /Users/x/OneDrive/Proposal'), []);
+  assert.deepEqual(bashWriteDestinations('cat /etc/passwd'), []);
+  assert.deepEqual(bashWriteDestinations('rm -rf /Users/x/OneDrive/Proposal'), []);
+  assert.deepEqual(bashWriteDestinations('rm /Users/x/OneDrive/Proposal/f'), []);
+  assert.deepEqual(bashWriteDestinations('trash /Users/x/OneDrive/Proposal/f'), []);
+});
+test('composite/redirect/empty commands are skipped', () => {
+  assert.deepEqual(bashWriteDestinations('cp a /dest && echo done'), []);
+  assert.deepEqual(bashWriteDestinations('echo hi > /Users/x/OneDrive/Proposal/f'), []);
+  assert.deepEqual(bashWriteDestinations(''), []);
 });
 
 console.log(`\nall ${passed} smoke tests passed`);

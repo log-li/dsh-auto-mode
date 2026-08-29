@@ -16,8 +16,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { ConfigType } from './config.js';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { compileRegex, classifyBand, bashCommandOf, matchRule, compileGlob, matchAllow, isCompositeShell } from './bands.js';
-import { VerdictCache } from './cache.js';
+import { compileRegex, classifyBand, bashCommandOf, matchRule, compileGlob, matchAllow, isCompositeShell, bashWriteDestinations } from './bands.js';
+import { VerdictCache, hashString } from './cache.js';
 import { Breaker } from './breaker.js';
 import { classifyTwoStage, renderUserIntent, resolveRoute, type Verdict } from './classifier.js';
 import { buildSystemPrompt, buildUserMessage, promptInputOf } from './prompt.js';
@@ -257,13 +257,16 @@ export function registerPreExecute(
 
       // 5. Escalation intent OR out-of-workspace file op → classifier pre-screen.
       const isOutOfTreeFileOp = isFileToolCall && targetPaths.length > 0 && !inTrusted;
-      // Diagnose why a file op is (or isn't) classified: record the gate state.
-      if (isFileToolCall) {
+      // Bash write-commands (cp/mv/rsync/...) expose their destination; feed it to
+      // the curated allowPath check so exporting into a trusted dir is trusted.
+      const bashTargets = isFileToolCall ? [] : bashWriteDestinations(commandText);
+      // Diagnose why a file/bash op is (or isn't) classified: record the gate state.
+      if (isFileToolCall || (commandText && isEscalation)) {
         appendDecision({
-          event: 'pre-execute-fileop',
+          event: isFileToolCall ? 'pre-execute-fileop' : 'pre-execute-bashop',
           tool: toolName,
           sessionId: sid,
-          detail: `esc=${isEscalation} targets=${JSON.stringify(targetPaths)} inTree=${inTrusted} outOfTree=${isOutOfTreeFileOp} breaker=${breaker.isTripped(sid)} cwd=${session.header?.cwd ?? '?'}`,
+          detail: `esc=${isEscalation} ${isFileToolCall ? `targets=${JSON.stringify(targetPaths)}` : `bashDests=${JSON.stringify(bashTargets)}`} inTree=${inTrusted} outOfTree=${isOutOfTreeFileOp} breaker=${breaker.isTripped(sid)} cwd=${session.header?.cwd ?? '?'}`,
         });
       }
       if ((isEscalation || isOutOfTreeFileOp) && !breaker.isTripped(sid)) {
@@ -272,18 +275,27 @@ export function registerPreExecute(
           : `file operation outside trusted workspace: ${targetPaths.join(', ')}${exec.arguments?.justification ? ` — model explanation: ${String(exec.arguments.justification)}` : ''}`;
 
         // Curated allowPaths trust (Bug 6): real symlink-resolved prefix match, not substring.
-        if (targetPaths.length > 0 && targetPaths.every((p) => isInsideTrusted(p, roots))) {
+        // Covers file tools (targetPaths) AND bash write-commands (bashTargets destination).
+        const allowPathTargets = isFileToolCall ? targetPaths : bashTargets;
+        if (allowPathTargets.length > 0 && allowPathTargets.every((p) => isInsideTrusted(p, roots))) {
           appendDecision({
             event: 'pre-execute-allow',
             tool: toolName,
             sessionId: sid,
-            detail: `curated allowPath: ${targetPaths.join(', ')}`,
+            detail: `curated allowPath: ${allowPathTargets.join(', ')}`,
           });
           return next();
         }
 
+        // User intent is part of the verdict key: the classifier weighs the user's
+        // recent DIRECT instructions, so a fresh explicit authorization must not be
+        // swallowed by a cached DENY — hash the intent into the signature.
+        const derived = session.deriveMessages();
+        const userIntent = renderUserIntent(derived, config.classifier.maxIntentMessages);
+        const intentHash = hashString(userIntent);
+
         // Cache check (Bug 3: maxArgsChars wired into the signature).
-        const sig = VerdictCache.sig(toolName, escReason, exec.arguments, config.maxArgsChars);
+        const sig = VerdictCache.sig(toolName, escReason, exec.arguments, config.maxArgsChars, intentHash);
         const cached = cache.get(sid, sig);
         if (cached === 'DENY') {
           // Cached classifier denies count toward the breaker too (Bug 2026-08-25:
@@ -334,7 +346,6 @@ export function registerPreExecute(
           return next();
         }
 
-        const userIntent = renderUserIntent(session.deriveMessages(), config.classifier.maxIntentMessages);
         const input = promptInputOf(
           { toolName, reason: escReason, userIntent },
           softAllowRules,
