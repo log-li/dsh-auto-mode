@@ -253,4 +253,24 @@ reason:
 
 - **版本**：0.9.1（与上一条 bug 修复同一 patch 版本）。
 
+## E2E 复测发现的两个 bug 修复（2026-08-30 追补）
+
+### 背景
+重启后 E2E 复测（v0.9.1）发现两处问题：① deny 提示里分类器理由**重复出现两次**；② 写 allowlist 的 `/tmp` 路径没走 `curated allowPath` 分支而是掉进分类器（macOS 软链导致）。
+
+### Bug A：deny 提示理由重复
+- **现象**：`dsh-automode denied this action (classifier:<完整理由>): <完整理由> — reshape ...`——同一理由出现两次。
+- **根因**：`pre-execute.ts` 分类器 deny 分支（line 415）`denialText('classifier:${verdict.reason}', '${verdict.reason} — reshape...')` 把完整理由同时塞进 **category 槽**（本应是短标签）与 **reason 槽**。对比其他 deny 路径：确定性频带用 `'deny'`、缓存拒绝用 `'classifier:unsafe'`，均不重复。
+- **修复（已实现）**：category 改为短标签 `'classifier:unsafe'`（与缓存拒绝路径一致），理由只保留在 reason 槽一次。
+
+### Bug B：macOS `/tmp` 软链使 allowPath 对新建文件失效
+- **现象**：`write /tmp/dsh-xxx.txt`（新文件）落 `pre-execute-fileop inTree=false`，走分类器而非 `curated allowPath`。
+- **根因**：`realpathSafe(p)` 对**不存在的路径**回退到 `resolve(p)`（词法解析）。gate 时刻目标文件还不存在 → 目标解析为 `/tmp/...`；而 allowPath 根 `/tmp/` **已存在** → `realpathSync` 解析为 `/private/tmp`（macOS 软链）。`/tmp/...` 不以 `/private/tmp/` 开头 → 匹配失败。**任何软链 allowPath 根下的新建文件都匹配不上**；无软链的 OneDrive 正常。
+- **修复（已实现）**：`realpathSafe` 对不存在路径改为**找最近存在的祖先 realpath + 拼接尾部**——`/tmp/dsh-new.txt` → 父 `/tmp` 存在 → realpath `/private/tmp` + `dsh-new.txt` → 命中 `/private/tmp/` 根。实测：OLD 不信任 /tmp 新文件（false）、NEW 信任（true）；对照 `~/a.txt` 两者均不误放。
+- **验证**：`npm run typecheck` + `npm test`；node 断言（realpathSafe 对 /tmp 新文件/深层不存在路径/已存在文件/普通路径）。
+
+- **版本**：0.9.1 → **0.9.2**（bug 修复：deny 理由去重 + macOS 软链 allowPath 新建文件失效）。
+- **README 文档化（2026-08-30）**：README(en/zh) 新增「Compatibility & contributions」段——声明**仅 macOS 验证**（含 `/tmp` → `/private/tmp` 软链由 realpath 最近祖先解析处理）、Linux/Windows 未验证（路径/deny 语义可能有差异），并**欢迎其它平台问题与 bug 的 issue/PR**（指向仓库地址）。
+
+
 

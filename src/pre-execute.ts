@@ -25,7 +25,7 @@ import { expandDefaults } from './config.js';
 import { effectivePermissionPreset } from '@deepseek-ai/dsh-permission-presets';
 import { appendDecision } from './log.js';
 import { realpathSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import { resolve, sep, join, dirname, basename } from 'node:path';
 
 // ---- File-path trust helpers (Bug 5 real-path check; Bug 6 tighter allowPaths) ----
 
@@ -35,12 +35,31 @@ function expandHome(p: string): string {
   return p.replace(/^~(?=$|\/)/, home).replace(/\$\{HOME\}|\$HOME/g, home);
 }
 
-/** Best-effort realpath (symlink resolution); if the path doesn't exist yet, resolve lexically. */
+/**
+ * Best-effort realpath (symlink resolution). When the path itself doesn't
+ * exist yet (a not-yet-written target at gate time), resolve the nearest
+ * existing ancestor's realpath and re-append the remaining tail — so targets
+ * under a symlinked allowPath root (e.g. macOS `/tmp` → `/private/tmp`) still
+ * match their trust root instead of falling back to a lexical path that skips
+ * the symlink.
+ */
 function realpathSafe(p: string): string {
   try {
     return realpathSync(p);
   } catch {
-    return resolve(p);
+    let rest = '';
+    let cur = p;
+    for (;;) {
+      try {
+        return join(realpathSync(cur), rest);
+      } catch {
+        // keep walking up
+      }
+      const next = dirname(cur);
+      if (next === cur) return resolve(p); // hit the root — bail to lexical
+      rest = join(basename(cur), rest);
+      cur = next;
+    }
   }
 }
 
@@ -412,7 +431,7 @@ export function registerPreExecute(
               : '';
             return {
               kind: 'deny',
-              reason: denialText(`classifier:${verdict.reason}`, `${verdict.reason} — reshape the command so it fits the allowlist, or drop the escalation`, modelExplanation),
+              reason: denialText('classifier:unsafe', `${verdict.reason} — reshape the command so it fits the allowlist, or drop the escalation`, modelExplanation),
             };
           }
           if (verdict.decision === 'allow') {

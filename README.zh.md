@@ -275,6 +275,11 @@ src/
   log.ts           共享 appendDecision JSONL 日志器
 ```
 
+## 兼容性与贡献
+
+- **仅在 macOS 上验证**。已针对 macOS 文件系统、DeepSeek Harness（DSH）运行时与开发时使用的 DSH 版本做过测试。路径语义——包括 macOS 的 `/tmp` → `/private/tmp` 软链（由 realpath 最近祖先解析处理）与工作区路径信任——**尚未在 Linux / Windows 上验证**，deny 模式与路径匹配在这些平台上可能有差异。
+- **发现 bug，或其它平台上有问题？** 欢迎提交 issue 或 PR：[github.com/log-li/dsh-automode](https://github.com/log-li/dsh-automode)。
+
 ## 许可证
 
 [MIT](./LICENSE)
