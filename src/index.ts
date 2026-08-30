@@ -69,11 +69,10 @@ const AUTO_SANDBOX = 'workspace-write';
 // ---- System-prompt shadowing (Nuo-cl) ----
 
 const AUTO_SENTENCE =
-  'Approval policy: auto. Every tool call that would normally need ' +
-  'approval is inspected by a separate reviewer model, which returns one of ' +
-  'three rulings: approved, blocked, or needs-human-input. If a tool result ' +
-  'later says the user rejected the call, remember that the reviewer may be ' +
-  'the one that blocked it — a person did not necessarily object.';
+  'Approval policy: auto. A separate reviewer model decides each permission-gated ' +
+  'tool call: allow or reject. A reject is denied before execution — retry safely or ' +
+  'escalate to the user (a wrong allow cannot be undone). If a tool result says the ' +
+  'user rejected the call, the reviewer may have blocked it — not necessarily a person.';
 
 const ASK_SENTENCE =
   'Approval policy: ask. Operations that require approval may ask through ' +
@@ -84,15 +83,12 @@ const NEVER_SENTENCE =
   'approval are rejected automatically — do not request sandbox escalation.';
 
 const ALLOWLIST_SENTENCE =
-  'Auto-mode path allowlist: when an action is denied because its target is outside the ' +
-  'trusted workspace, the user can trust that path via the `allowPaths` config on the ' +
-  'auto-mode plugin row. Edit `<profile>/cordis.patch.yml` entry `- id: auto-mode` under ' +
-  '`config.allowPaths` (e.g. `~/.dsh/profiles/web/cordis.patch.yml`); the patch replaces the ' +
-  'whole config, so keep the shipped default `/tmp/` and add real (symlink-resolved) absolute ' +
-  'paths. Allowlisted paths skip the safety classifier for file tools and bash write-commands ' +
-  '(cp/mv/rsync/...); hard deny patterns still run first. Only modify the config after the user ' +
-  'explicitly asks — otherwise propose the exact edit and let the user confirm, since adding a ' +
-  'path declares full trust in that directory.';
+  'Auto-mode path allowlist: to trust a path the classifier rejects, add it to ' +
+  '`config.allowPaths` on the `- id: auto-mode` row of `<profile>/cordis.patch.yml` ' +
+  '(e.g. ~/.dsh/profiles/web/cordis.patch.yml). Keep the default `/tmp/` — the patch ' +
+  'replaces the whole config. Allowlisted paths skip the classifier for file tools and ' +
+  'bash write-commands; deny patterns still run first. Only edit after the user ' +
+  'explicitly asks; otherwise propose the change and wait.';
 
 // ---- Helpers ----
 

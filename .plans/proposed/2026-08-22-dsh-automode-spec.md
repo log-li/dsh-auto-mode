@@ -245,6 +245,12 @@ reason:
 ### 验证
 - `npm run typecheck` + `npm test`；`npm run build`。
 - 行为验证：重启 dsh 后 auto-mode 会话系统提示应含 `auto-mode:allowlist` 段；非 auto-mode 会话不含。
+
+### 精简与纠错（2026-08-30 追补）
+- **AUTO_SENTENCE 纠错（两态化）**：原句仍写 "three rulings: approved, blocked, or needs-human-input"——这是 0.8.0 两态化（`allow | reject`，ask 移除）**遗留的过期描述**，会误导模型。改写为两态语义（allow/reject；reject 执行前拒绝，可安全重试或升级给用户，误放不可撤销），保留"user rejected 可能是 reviewer 拦的"提示。
+- **ALLOWLIST_SENTENCE 精简**：删除同一配置身份的重复表述（"the `allowPaths` config on the auto-mode plugin row" 与 "entry `- id: auto-mode` under `config.allowPaths`" 二选一），安全边界句收紧。754 → ~470 字符。
+- **目标**：auto 模式合计提示 1099 → ~810 字符（~200 tokens，-26%），且修正一处事实错误；提示保持"能定位配置、能自证边界、不产生误解"。
+
 - **版本**：0.9.1（与上一条 bug 修复同一 patch 版本）。
 
 
