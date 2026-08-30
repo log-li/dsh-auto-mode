@@ -371,7 +371,7 @@ export function parseVerdict(reply: string): Verdict | null {
       decision,
       reason:
         typeof reason === 'string' && reason.length > 0
-          ? reason.slice(0, 200)
+          ? reason
           : `classifier decision: ${decision}`,
     };
   }

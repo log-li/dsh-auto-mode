@@ -201,3 +201,30 @@ src/
 - **E2E 复测（2026-08-29）**：带 `&` 文件名（`DSH-E2E Research Statement & Methods - Ver11.0.docx`）的简单 cp 实测落 `curated allowPath`（bashDests 正确提取），引号感知修复活体生效；文件工具 allowPath 正常；真实用户请求的 OneDrive 导出 approval 路径 `allowed-once`。另确认：多行 shell 脚本（含 `$` 变量/`&&`）属复合命令按设计回退 classifier（非缺陷）。
 - **版本**：0.8.0 → **0.9.0**（行为变更：裁决缓存意图感知 + allowPaths 覆盖 bash 写命令 + 引号感知复合判定）。
 
+## deny 理由 200 字符截断修复（2026-08-30 补记）
+
+### 背景（实测复现）
+`decisions.jsonl` 中多条 deny 记录的 `reason` **恰好 200 字符、被切断在句子中间**（例：`...appears to be a `、`...serves no part of the user's re`、`...already denied in ~/Documents and ~/Downl`）。分类器写了完整的拒绝理由（常 200–350 字符），但传给模型的 deny 提示里理由只剩前 200 字符，导致模型看不懂"为什么被拒"，无法按提示改造命令，只能盲目重试。
+
+### 根因（bug）
+`classifier.ts` 的 `parseVerdict` 内部 `verdict()` 帮助函数：
+```ts
+reason:
+  typeof reason === 'string' && reason.length > 0
+    ? reason.slice(0, 200)   // ← 唯一截断点
+    : `classifier decision: ${decision}`,
+```
+该 `slice(0, 200)` 从 v0.4.1 起存在、从未改动。截断后的 `verdict.reason` 经 `pre-execute.ts` 的 `denialText(...)` 原样嵌入给模型的 deny error 提示，并写入 `decisions.jsonl`。
+
+### 决策
+- **移除 200 字符截断，完整理由透传**。理由本身受分类器 `maxTokens`（2048）约束，不会无限长；deny 提示是给模型的关键指引，截断直接伤害决策质量。
+- 不引入新的截断点；`decisions.jsonl` 为 JSONL，长字符串无碍。
+- **注意区分**：与 2026-08-29 的"缓存不感知授权"是**两个独立问题**——前者修的是缓存命中逻辑（intentHash），本次修的是理由透传（无截断），互不涉及。
+
+### 修复（已实现）
+- `classifier.ts` `verdict()`：删除 `reason.slice(0, 200)`，改为直接透传 `reason`（保持 `typeof reason === 'string' && reason.length > 0` 的守卫与默认兜底）。
+
+### 验证
+- `npm run typecheck` + `npm test`；`npm run build` 后 node 断言 `parseVerdict` 对超 200 字符理由不再截断（长度 > 200 原样返回）。
+- **版本**：0.9.0 → **0.9.1**（bug 修复：deny 理由不再被 200 字符截断，完整透传给模型与日志）。
+
