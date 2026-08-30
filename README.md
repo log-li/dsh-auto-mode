@@ -177,6 +177,8 @@ Configuration goes in your profile's `cordis.patch.yml`. Everything has defaults
 
 Only recognized write-commands are trusted (deletion such as `rm`/`trash` is never allowlisted), and paths are matched after symlink resolution — both a `/Users/<you>/OneDrive - …` symlink and the real `Library/CloudStorage/…` path work. The verdict-cache fix below still matters: even without an `allowPath`, once you explicitly authorize an action the classifier re-runs with your intent instead of replaying a cached denial.
 
+Every **auto-mode** session also receives this knowledge as a system-prompt section (`auto-mode:allowlist`): the model knows where the per-profile `allowPaths` lives and how to edit it, so when an action is blocked it can propose the exact config change — and only applies it after you explicitly confirm.
+
 ### Permission preset icon
 
 The `auto-mode` permission preset shows a bolt glyph in the permission picker. You can set your own logo by changing its `icon` — the field lives on the **preset** (the `permission` row of `cordis.patch.yml`, not `auto-mode`'s own config) and is an SVG path drawn inside the shared shield outline:

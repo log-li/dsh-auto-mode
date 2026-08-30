@@ -83,6 +83,17 @@ const NEVER_SENTENCE =
   'Approval prompts are disabled in this session: actions that require ' +
   'approval are rejected automatically — do not request sandbox escalation.';
 
+const ALLOWLIST_SENTENCE =
+  'Auto-mode path allowlist: when an action is denied because its target is outside the ' +
+  'trusted workspace, the user can trust that path via the `allowPaths` config on the ' +
+  'auto-mode plugin row. Edit `<profile>/cordis.patch.yml` entry `- id: auto-mode` under ' +
+  '`config.allowPaths` (e.g. `~/.dsh/profiles/web/cordis.patch.yml`); the patch replaces the ' +
+  'whole config, so keep the shipped default `/tmp/` and add real (symlink-resolved) absolute ' +
+  'paths. Allowlisted paths skip the safety classifier for file tools and bash write-commands ' +
+  '(cp/mv/rsync/...); hard deny patterns still run first. Only modify the config after the user ' +
+  'explicitly asks — otherwise propose the exact edit and let the user confirm, since adding a ' +
+  'path declares full trust in that directory.';
+
 // ---- Helpers ----
 
 export function isAuto(session: Session): boolean {
@@ -388,6 +399,11 @@ export function apply(ctx: Context, rawConfig: unknown): void {
             if (policy === 'auto') return AUTO_SENTENCE;
             return policy === 'never' ? NEVER_SENTENCE : ASK_SENTENCE;
           },
+        });
+        agentScope.systemPrompt.context({
+          name: 'auto-mode:allowlist',
+          order: 116,
+          text: () => (isAuto(agent.session) ? ALLOWLIST_SENTENCE : ''),
         });
       });
     });

@@ -178,6 +178,8 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 只有被识别的写命令才会被信任（删除类命令 `rm`/`trash` 绝不会被白名单放行）；路径在 symlink 解析后匹配，`/Users/<you>/OneDrive - …` 软链与真实 `Library/CloudStorage/…` 路径都可用。下面的裁决缓存修复仍然重要：即便没有 allowPath，你一旦显式授权某个动作，分类器也会带着你的意图重跑，而不是回放旧的缓存拒绝。
 
+每个 **auto-mode** 会话也会通过系统提示段（`auto-mode:allowlist`）获得这份知识：模型知道 per-profile 的 `allowPaths` 配置在哪、怎么改——动作被拦截时可以给出精确的配置修改建议，且**只有在你明确确认后**才会实际改动。
+
 ### 权限预设图标
 
 `auto-mode` 权限预设会在权限选择器里显示一个 ⚡ 图标。你可以通过改它的 `icon` 设置自己的 logo——该字段位于**预设**（`cordis.patch.yml` 的 `permission` 行，不是 `auto-mode` 自身配置），是一个画在共享盾牌轮廓内的 SVG 路径：

@@ -228,3 +228,23 @@ reason:
 - `npm run typecheck` + `npm test`；`npm run build` 后 node 断言 `parseVerdict` 对超 200 字符理由不再截断（长度 > 200 原样返回）。
 - **版本**：0.9.0 → **0.9.1**（bug 修复：deny 理由不再被 200 字符截断，完整透传给模型与日志）。
 
+## allowlist 配置位置注入系统提示（2026-08-30 补记）
+
+### 背景（需求）
+运行中动作偶尔被拦截（目标路径在工作区外）。用户希望把路径加入白名单，但**模型不知道白名单配置在哪儿、改什么**——allowPaths 的配置方法只写在 README（给人看），模型在会话里看不到，导致「想加白名单却无从下手」。
+
+### 决策
+- 用插件已有的 **system prompt 注入机制**（`systemPrompt.context`）给**每个 auto-mode 会话**注入一段 `auto-mode:allowlist` 指引：告诉模型 allowPaths 配置的位置、改法、行为与安全边界。
+- 仅在** auto-mode 生效**的会话注入（`text()` 惰性求值，`isAuto(agent.session)` 为 false 时返回空串）——pre-execute gate 只在 auto-mode 下拦截，非 auto-mode 会话无需该指引。
+- 不动 `denialText`（deny 提示已含「ask user for explicit permission」，再加配置位置会臃肿；全局知识放 system prompt 一次到位）。
+
+### 实现（已实现）
+- `src/index.ts` 新增 `ALLOWLIST_SENTENCE` 常量（内容：`<profile>/cordis.patch.yml` 的 `- id: auto-mode` → `config.allowPaths` 覆写点；patch 整体替换 config 故需保留 `/tmp/` 默认；allowlist 内文件工具与 bash 写命令跳过分类器、硬 deny 频带仍最先执行；仅用户显式要求才改配置，否则给出精确编辑建议待用户确认）。
+- `agent/created` 的 `systemPrompt.context` 注册新增 `auto-mode:allowlist`（`order: 116`，紧跟 `approval:policy` 的 115），`text()` 返回 `isAuto(agent.session) ? ALLOWLIST_SENTENCE : ''`。
+
+### 验证
+- `npm run typecheck` + `npm test`；`npm run build`。
+- 行为验证：重启 dsh 后 auto-mode 会话系统提示应含 `auto-mode:allowlist` 段；非 auto-mode 会话不含。
+- **版本**：0.9.1（与上一条 bug 修复同一 patch 版本）。
+
+
