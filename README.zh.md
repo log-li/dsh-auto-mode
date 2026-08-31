@@ -113,65 +113,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 ## 配置
 
-配置写在 profile 的 `cordis.patch.yml`。一切都有默认值，裸 `{}` 配置也合法。
-
-```yaml
-- id: auto-mode
-  name: dsh-automode
-  config:
-    # --- 硬边界 ---
-
-    deny:
-      - exfiltrat
-      - 'curl\s+[^|]*\|\s*(?:ba)?sh'
-      - authorized_keys
-      # ... 正则模式
-
-    allow:
-      - 'trash *'
-      - 'echo *'
-      - 'git status'
-      - 'ls*'
-      # ... 前缀 glob
-
-    readOnlyTools:
-      - read
-      - glob
-      - grep
-      - list
-      - search
-
-    allowPaths:
-      - '~/Documents/'
-      - '/tmp/'
-
-    allowInsideWorkingDirectory: true
-
-    # --- 分类器 ---
-
-    classifier:
-      provider: ''             # 为空 = 跟随会话当前模型（request header）
-      model: ''                # 为空 = 跟随会话当前模型（request header）
-      maxTranscriptMessages: 40
-      maxTokens: 2048
-      temperature: 0
-      reasoningLevel: off      # off / low / medium / high
-
-    rules:
-      deny: ['$defaults']
-      allow: ['$defaults']
-      environment: ['$defaults']
-
-    # --- 运行时 ---
-
-    failClosed: true           # 分类器失败时拒绝
-    preExecuteGate: true       # 启用 pre-execute 门
-    timeoutMs: 45000           # 分类器调用硬超时
-    classifyContextChars: 6000 # 任务对齐的上下文字符预算
-    maxArgsChars: 4000         # 裁决缓存 key 命令签名的字符预算
-    breakerConsecutive: 3      # 连续 DENY 触发熔断
-    breakerTotal: 20           # 总 DENY 触发熔断
-```
+配置写在 profile 的 `cordis.patch.yml`。一切都有默认值，裸 `{}` 配置也合法。下表是完整参考；最小示例（`allowPaths` 覆写）见 [信任额外目录](#信任额外目录allowpaths)。
 
 ### 关键选项
 
@@ -180,10 +122,10 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `deny` | 内置列表 | 正则模式，硬拒绝。首个匹配生效。 |
 | `allow` | 内置列表 | 前缀 glob，不调用 LLM 放行。 |
 | `readOnlyTools` | read, glob, grep, list, search | 默认放行的工具（除非命中 deny）。 |
-| `allowPaths` | `[]` | 全信任的外部目录（curated）。目标落在这些目录内的文件操作跳过分类器；bash 写命令（cp/mv/rsync/ditto/install/tar -x -C/unzip -d/curl -o/wget -O/git clone）的**目标**解析后落在其中同样跳过。v0.10.0 起，**提权调用**落入 allowlist 路径时，approval answerer 也直接放行、不再经分类器评审（日志记 `approval-bridge`）。真实路径（symlink resolve）前缀匹配。随插件发布默认保持通用——个人目录在 profile 里配置（见下）。 |
+| `allowPaths` | `[]` | 全信任的外部目录：目标落在其中的文件操作与 bash 写命令跳过分类器；v0.10.0 起提权调用也自动放行（`approval-bridge`）。见 [信任额外目录](#信任额外目录allowpaths)。 |
 | `allowInsideWorkingDirectory` | `true` | 工作区内文件操作不经分类器。 |
-| `classifier.provider` / `classifier.model` | `''`（跟随会话） | 覆盖分类器 LLM 路由。解析顺序：`classifier.{provider,model}` → 会话当前模型（request header）→ agent 配置模型。为空时分类器用会话正在使用的模型。 |
-| `classifier.reasoningLevel` | `off` | 传给分类器的推理强度（`reasoningEffort`）：`off` 关闭推理；`low/medium/high` 开启。若路由拒绝该 effort（抛 `UNSUPPORTED_REASONING_EFFORT` **或** 以 `error` finish chunk 终结），调用会重试不传 effort。默认为 `off`：已在 opencode-go 路由实测 ~1–1.7s 返回、无 reasoning 块、不超时。 |
+| `classifier.provider` / `classifier.model` | `''`（跟随会话） | 覆盖分类器 LLM 路由。解析顺序：`classifier.{provider,model}` → 会话当前模型 → agent 配置模型。 |
+| `classifier.reasoningLevel` | `off` | 分类器推理强度（`off` 关闭推理）。若路由拒绝该 effort，调用会重试不传 effort。 |
 | `rules.deny` | `['$defaults']` | 分类器软拒绝散文。 |
 | `rules.allow` | `['$defaults']` | 分类器软放行散文。 |
 | `rules.environment` | `['$defaults']` | 分类器环境事实。 |
@@ -216,7 +158,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 ### 权限预设图标
 
-`auto-mode` 权限预设会在权限选择器里显示一个 ⚡ 图标。你可以通过改它的 `icon` 设置自己的 logo——该字段位于**预设**（`cordis.patch.yml` 的 `permission` 行，不是 `auto-mode` 自身配置），是一个画在共享盾牌轮廓内的 SVG 路径：
+`auto-mode` 预设默认在权限选择器里显示 ⚡ 图标。想换 logo，就覆盖**预设**上的 `icon`（`cordis.patch.yml` 的 `permission` 行，不是 `auto-mode` 自身配置）——一个画在盾牌轮廓内的 SVG 路径：
 
 ```yaml
 - id: permission
@@ -230,9 +172,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
         icon: '<你的-svg-path-d>'   # 默认 bolt：'M9.15 3.4L5.85 8.55H7.95L7.05 12.6L10.45 7.25H8.25L9.15 3.4Z'
 ```
 
-**是否显示**。选择器只有在 DSH 读取预设 `icon` 时才会绘制它。原生 DSH 硬编码了一个小的 glyph 映射，对 host 配置的预设不显示图标，因此该字段在那里会被静默忽略。你**不需要改 DSH 源码仓库、也不需要新增任何插件**——它只是一个被"支持预设 icon 的 DSH"消费的声明（某个读取预设 `icon` 的发布版，或对你这台机器运行的 DSH 打一次小补丁）。
-
-图标只是外观——无论是否渲染，auto mode 行为完全一致。如果你不设 `icon`，插件默认是 bolt；在原生 DSH 上预设只显示标签。
+图标只是**外观**——无论是否渲染，行为完全一致。它只在支持读取预设 `icon` 的 DSH 上显示（原生 DSH 会忽略；本机 `dsh-permission-preset-icon.mjs` 补丁开启）。不设 `icon` 即用默认 bolt。
 
 ### 两阶段分类器
 
