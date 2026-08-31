@@ -148,7 +148,7 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 | `deny` | 内置列表 | 正则模式，硬拒绝。首个匹配生效。 |
 | `allow` | 内置列表 | 前缀 glob，不调用 LLM 放行。 |
 | `readOnlyTools` | read, glob, grep, list, search | 默认放行的工具（除非命中 deny）。 |
-| `allowPaths` | `[]` | 全信任的外部目录（curated）。目标落在这些目录内的文件操作跳过分类器；bash 写命令（cp/mv/rsync/ditto/install/tar -x -C/unzip -d/curl -o/wget -O/git clone）的**目标**解析后落在其中同样跳过。真实路径（symlink resolve）前缀匹配。随插件发布默认保持通用——个人目录在 profile 里配置（见下）。 |
+| `allowPaths` | `[]` | 全信任的外部目录（curated）。目标落在这些目录内的文件操作跳过分类器；bash 写命令（cp/mv/rsync/ditto/install/tar -x -C/unzip -d/curl -o/wget -O/git clone）的**目标**解析后落在其中同样跳过。v0.10.0 起，**提权调用**落入 allowlist 路径时，approval answerer 也直接放行、不再经分类器评审（日志记 `approval-bridge`）。真实路径（symlink resolve）前缀匹配。随插件发布默认保持通用——个人目录在 profile 里配置（见下）。 |
 | `allowInsideWorkingDirectory` | `true` | 工作区内文件操作不经分类器。 |
 | `classifier.provider` / `classifier.model` | `''`（跟随会话） | 覆盖分类器 LLM 路由。解析顺序：`classifier.{provider,model}` → 会话当前模型（request header）→ agent 配置模型。为空时分类器用会话正在使用的模型。 |
 | `classifier.reasoningLevel` | `off` | 传给分类器的推理强度（`reasoningEffort`）：`off` 关闭推理；`low/medium/high` 开启。若路由拒绝该 effort（抛 `UNSUPPORTED_REASONING_EFFORT` **或** 以 `error` finish chunk 终结），调用会重试不传 effort。默认为 `off`：已在 opencode-go 路由实测 ~1–1.7s 返回、无 reasoning 块、不超时。 |
@@ -177,6 +177,8 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 ```
 
 只有被识别的写命令才会被信任（删除类命令 `rm`/`trash` 绝不会被白名单放行）；路径在 symlink 解析后匹配，`/Users/<you>/OneDrive - …` 软链与真实 `Library/CloudStorage/…` 路径都可用。下面的裁决缓存修复仍然重要：即便没有 allowPath，你一旦显式授权某个动作，分类器也会带着你的意图重跑，而不是回放旧的缓存拒绝。
+
+**零确认提权（v0.10.0）**。allowlist 路径意味着**全信任**：请求放宽沙箱（`sandbox_permissions: danger-full-access`）进入 allowlist 路径的调用现在**无需任何确认、不经分类器直接放行**——pre-execute 门已确定性证明所有目标都在 `allowPath` 内，该结论通过调用的 `callId` 传给 approval answerer（审计日志呈现 `curated allowPath` → `approval-bridge` → `decision allowed-once`）。deny 频带仍最先执行（`~/.ssh/` 等 deny 路径即便在 allowPath 内也硬拒），熔断器也不会被绕过——跳闸期间 allowlist 调用仍走人工。
 
 每个 **auto-mode** 会话也会通过系统提示段（`auto-mode:allowlist`）获得这份知识：模型知道 per-profile 的 `allowPaths` 配置在哪、怎么改——动作被拦截时可以给出精确的配置修改建议，且**只有在你明确确认后**才会实际改动。
 

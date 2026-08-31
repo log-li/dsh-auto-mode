@@ -42,6 +42,7 @@ import {
 } from './classifier.js';
 import { VerdictCache, hashString } from './cache.js';
 import { Breaker } from './breaker.js';
+import { AllowPathBridge } from './bridge.js';
 import { registerPreExecute, BREAKER_TRIPPED_HINT } from './pre-execute.js';
 import { appendDecision } from './log.js';
 import { readFileSync } from 'node:fs';
@@ -154,6 +155,7 @@ async function decideAuto(
   next: () => Promise<ApprovalOutcome>,
   cache: VerdictCache,
   breaker: Breaker,
+  bridge: AllowPathBridge,
   logger: { info: (m: string) => void; warn: (m: string) => void },
 ): Promise<ApprovalOutcome> {
   const { agent, toolName, reason, signal } = req;
@@ -174,6 +176,26 @@ async function decideAuto(
   if (denyRule) {
     logger.info(`soft deny rule "${denyRule}" → reject ${toolName}`);
     return 'rejected';
+  }
+
+  // 2.5. AllowPath bridge (2026-08-31): the pre-execute gate already proved every
+  // target of THIS exact call (matched by callId) is inside config.allowPaths,
+  // and deny patterns ran first above — grant the escalation deterministically
+  // without classifier review. Non-bridged calls (non-allowlisted, stale, or a
+  // different tool) fall through unchanged. Mirrors the gate's order: deny
+  // first, allowPath second.
+  const bridged = req.callId !== undefined && req.callId !== null
+    ? bridge.take(String(req.callId), toolName)
+    : undefined;
+  if (bridged) {
+    logger.info(`allowPath bridge hit for ${toolName} (${String(req.callId)}) → approve`);
+    appendDecision({
+      event: 'approval-bridge',
+      tool: toolName,
+      sessionId: String(agent.session.id ?? '?'),
+      detail: `curated allowPath escalation auto-allowed: ${bridged.paths.join(', ')}`,
+    });
+    return 'allowed-once';
   }
 
   // 3. Prose allow rules (soft_allow, $defaults expanded)
@@ -339,10 +361,11 @@ export function apply(ctx: Context, rawConfig: unknown): void {
   const logger = ctx.logger('auto-mode');
   const cache = new VerdictCache();
   const breaker = new Breaker();
+  const bridge = new AllowPathBridge();
 
   // --- 1. Pre-execute gate ---
   if (config.preExecuteGate) {
-    registerPreExecute(ctx, config, cache, breaker, logger);
+    registerPreExecute(ctx, config, cache, breaker, logger, bridge);
   }
 
   // --- 2. Approval answerer ---
@@ -371,7 +394,7 @@ export function apply(ctx: Context, rawConfig: unknown): void {
       });
     }
 
-    return decideAuto(ctx, config, req, next, cache, breaker, logger).then((outcome) => {
+    return decideAuto(ctx, config, req, next, cache, breaker, bridge, logger).then((outcome) => {
       appendDecision({
         event: 'decision',
         outcome,

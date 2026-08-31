@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ConfigType } from './config.js';
 import { VerdictCache } from './cache.js';
 import { Breaker } from './breaker.js';
+import { AllowPathBridge } from './bridge.js';
 /**
  * Injected at the moment the breaker trips so the model stops doing the
  * "try at current level → hit a denied error → then escalate" round-trip
@@ -34,4 +35,4 @@ export interface PreExecuteResult {
 export declare function registerPreExecute(ctx: Context, config: ConfigType, cache: VerdictCache, breaker: Breaker, logger: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
-}): void;
+}, bridge: AllowPathBridge): void;

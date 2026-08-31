@@ -11,6 +11,7 @@ import { buildSystemPrompt, buildUserMessage } from '../lib/prompt.js';
 import { isAuto, writeAutoMode } from '../lib/index.js';
 import { Breaker } from '../lib/breaker.js';
 import { VerdictCache, hashString } from '../lib/cache.js';
+import { AllowPathBridge } from '../lib/bridge.js';
 import { tokenizeShell, bashWriteDestinations } from '../lib/bands.js';
 
 let passed = 0;
@@ -364,6 +365,64 @@ test('composite/redirect/empty commands are skipped', () => {
   assert.deepEqual(bashWriteDestinations('cp a /dest && echo done'), []);
   assert.deepEqual(bashWriteDestinations('echo hi > /Users/x/OneDrive/Proposal/f'), []);
   assert.deepEqual(bashWriteDestinations(''), []);
+});
+
+console.log('bridge.js (AllowPathBridge — pre-execute → approval callId bridge)');
+test('record then take consumes the entry for the same callId + tool', () => {
+  const b = new AllowPathBridge();
+  b.record('call-1', 'write', ['/tmp/a.txt']);
+  assert.equal(b.size, 1);
+  const hit = b.take('call-1', 'write');
+  assert.ok(hit);
+  assert.equal(hit.toolName, 'write');
+  assert.deepEqual(hit.paths, ['/tmp/a.txt']);
+  // consume-on-read: a second take for the same callId is a miss
+  assert.equal(b.take('call-1', 'write'), undefined);
+  assert.equal(b.size, 0);
+});
+test('take requires the exact callId (no cross-call leakage)', () => {
+  const b = new AllowPathBridge();
+  b.record('call-1', 'write', ['/tmp/a.txt']);
+  assert.equal(b.take('call-2', 'write'), undefined); // different callId → miss
+  assert.equal(b.take('call-1', 'write')?.toolName, 'write'); // original still intact
+});
+test('take requires the same tool name (no cross-tool reuse)', () => {
+  const b = new AllowPathBridge();
+  b.record('call-1', 'write', ['/tmp/a.txt']);
+  assert.equal(b.take('call-1', 'edit'), undefined); // wrong tool → miss
+  assert.equal(b.take('call-1', 'write')?.toolName, 'write');
+});
+test('stale records are not granted (TTL)', () => {
+  const b = new AllowPathBridge();
+  b.record('call-1', 'write', ['/tmp/a.txt']);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 70_000; // 70s later > 60s TTL
+  try {
+    assert.equal(b.take('call-1', 'write'), undefined);
+  } finally {
+    Date.now = realNow;
+  }
+});
+test('empty/absent callId never records or grants', () => {
+  const b = new AllowPathBridge();
+  b.record('', 'write', ['/tmp/a.txt']);
+  assert.equal(b.size, 0);
+  assert.equal(b.take(undefined, 'write'), undefined);
+});
+test('size stays bounded at the cap', () => {
+  const b = new AllowPathBridge();
+  for (let i = 0; i < 2100; i++) b.record(`call-${i}`, 'write', ['/tmp/x']);
+  assert.ok(b.size <= 2000, `size=${b.size} should be capped at 2000`);
+  // the oldest entry was evicted; recent entries survive
+  assert.equal(b.take('call-0', 'write'), undefined);
+  assert.equal(b.take('call-2099', 'write')?.toolName, 'write');
+});
+test('clear empties the bridge', () => {
+  const b = new AllowPathBridge();
+  b.record('call-1', 'write', ['/tmp/a.txt']);
+  b.clear();
+  assert.equal(b.size, 0);
+  assert.equal(b.take('call-1', 'write'), undefined);
 });
 
 console.log(`\nall ${passed} smoke tests passed`);

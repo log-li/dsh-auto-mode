@@ -272,5 +272,47 @@ reason:
 - **版本**：0.9.1 → **0.9.2**（bug 修复：deny 理由去重 + macOS 软链 allowPath 新建文件失效）。
 - **README 文档化（2026-08-30）**：README(en/zh) 新增「Compatibility & contributions」段——声明**仅 macOS 验证**（含 `/tmp` → `/private/tmp` 软链由 realpath 最近祖先解析处理）、Linux/Windows 未验证（路径/deny 语义可能有差异），并**欢迎其它平台问题与 bug 的 issue/PR**（指向仓库地址）。
 
+## 白名单路径提权「完全自动放行」：approval 桥接（2026-08-31 补记）
+
+### 背景（实测复现，handoff 实证）
+2026-08-31 在 JC STEM 会话把 `~/.agents` 加入 `config.allowPaths` 后，向 `~/.agents/.dsh-whitelist-verify.txt` 写无害测试文件（带 `sandbox_permissions=danger-full-access` 提权），`decisions.jsonl` 连续两条：
+```
+pre-execute-allow  write  curated allowPath: ~/.agents/.dsh-whitelist-verify.txt
+decision           write  outcome=rejected  reason="escalate sandbox to danger-full-access: ..."
+```
+插件 pre-execute 门已按 allowPath 确定性放行，但同一调用仍被拒。用户显式确认（ask_user_question）后同动作才 `allowed-once`。结论：allowPath 只让 pre-execute 层放行，「提权评审层」仍会独立裁决。
+
+### 根因（关键澄清：评审层就是插件自己的 approval answerer）
+追踪 DSH 审批链后发现，所谓「harness 评审层」**并非独立于插件的 harness 模型**，而是 dsh-automode 自己在 `approval/request` 瀑布里注册的 answerer（`index.ts::decideAuto` + 其分类器）：
+- 提权调用 `approveEscalation`（@deepseek-ai/dsh-sandbox）→ `ctx.approval.request({ agent, toolName, callId, reason })` → 插件 answerer `decideAuto`。
+- `ApprovalRequest` 只带 `agent/toolName/callId?/reason?/signal?`，**没有 args/路径**（`decideAuto` 里 `const args = undefined // approval path doesn't carry raw args`）→ 审批路径无法复用 allowPath 判定 → 只能交给分类器；分类器无「用户在 allowPath 内」上下文 → 判 DENY → `outcome=rejected`。
+- pre-execute 门能放行是因为它有 `exec.arguments`（路径）；approval answerer 拿不到。
+- 用户显式确认后放行成功的原因：新授权消息进入 `renderUserIntent` 意图窗口 → 缓存签名变化 → 分类器读到用户明确授权 → allow。这反证评审者就是分类器（而非 harness 固有模型）。
+
+### 决策（方案 A 的插件内落点）
+在插件内加「approval 桥接」，让 allowPath 提权调用零评审、零确认自动放行，**不改 DSH 本体**：
+- pre-execute 门对 allowPath 提权放行时，用 **callId**（`tools/pre-execute` 的 `ToolExecution.callId` 与 `approval/request` 的 `callId` 是同一个值，dsh-tool-fs 的 `approveEscalation` 直接透传 `exec.callId`）记录一笔桥接。
+- approval answerer `decideAuto` 在 deny 频带之后、缓存/分类器之前查 `req.callId`：有新鲜桥接记录 → 直接 `allowed-once`（确定性、零 LLM）。
+- 为什么选插件内而非 patch DSH：① 评审者就是插件自己的 answerer/分类器，插件内修即修源头；② 不碰 npm-global 的 DSH 本体（升级会被覆盖、风险大）；③ callId 精确关联，无「时间窗+同工具名」的误放窗口。
+- 不采用方案 B（全局 danger-full-access）：放开整个沙箱，非白名单路径也失控，仅作临时备选。
+
+### 安全边界（与既有语义一致）
+- **deny 频带仍最先执行**：pre-execute 先 deny 后 allowPath，approval 桥接检查也放在 hard deny + soft deny 之后——白名单内的敏感路径（如 `~/.ssh/`、`authorized_keys`、`/etc/` 系统目录）仍硬拒。
+- 桥接只对 pre-execute 已**确定性**判定「所有目标都在 trust roots 内」的调用生效；非白名单路径不进桥接、行为不变（仍分类器/人工）。
+- breaker 跳闸时不进 allowPath 分支、不记录桥接 → 走人工，桥接不绕过熔断。
+- 桥接记录**消费即删**（take）+ 短 TTL（60s）+ 容量上限（2000）惰性清理，杜绝跨调用复用与内存增长。
+
+### 实现（已实现）
+- 新增 `src/bridge.ts`：`AllowPathBridge`（`record(callId, {toolName, paths, at})` / `take(callId)`，TTL+容量，惰性清理）。
+- `src/pre-execute.ts`：curated allowPath 分支 `return next()` 前 `bridge.record(exec.callId, {toolName, paths: allowPathTargets})`；`registerPreExecute` 新增 `bridge` 参数。
+- `src/index.ts`：`apply()` 创建 `bridge` 实例传入 `registerPreExecute` 与 `decideAuto`；`decideAuto` 步骤 1/2 deny 之后插入桥接检查，命中 → 记 `approval-bridge` 事件 + `allowed-once`。
+- 日志：桥接命中额外写 `event: 'approval-bridge'`，便于 E2E 在 decisions.jsonl 直接确认「curated allowPath + approval-bridge + decision allowed-once，无 rejected」。
+
+### 验证
+- `npm run typecheck` + `npm test`（新增 bridge 单测：record/take/TTL/容量清理/跨 callId 不误放）。
+- `scripts/bridge-flow-check.mjs`（HOME 指向临时目录、mock ctx apply 插件）：写 allowPath 文件（带提权）→ pre-execute 记 `curated allowPath` + 桥接 → approval 返回 `allowed-once`；未桥接的 approval/request 仍 `rejected`（failClosed 无路由）。
+- E2E（重启 dsh 后，auto-mode 会话）：写 `~/.agents/` 无害测试文件（带 danger-full-access）→ decisions.jsonl 只出现 `curated allowPath` + `approval-bridge` + `allowed-once`，无 `outcome=rejected`；非白名单路径（`~/.zshrc`、`/etc/`）行为不变；deny 模式（`~/.ssh/`）仍硬拒。
+- **版本**：0.9.2 → **0.10.0**（行为变更：allowPath 提权调用零评审零确认自动放行）。
+
 
 

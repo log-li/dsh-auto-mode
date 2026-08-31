@@ -19,6 +19,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { compileRegex, classifyBand, bashCommandOf, matchRule, compileGlob, matchAllow, isCompositeShell, bashWriteDestinations } from './bands.js';
 import { VerdictCache, hashString } from './cache.js';
 import { Breaker } from './breaker.js';
+import { AllowPathBridge } from './bridge.js';
 import { classifyTwoStage, renderUserIntent, resolveRoute, type Verdict } from './classifier.js';
 import { buildSystemPrompt, buildUserMessage, promptInputOf } from './prompt.js';
 import { expandDefaults } from './config.js';
@@ -156,6 +157,7 @@ export function registerPreExecute(
   cache: VerdictCache,
   breaker: Breaker,
   logger: { info: (msg: string) => void; warn: (msg: string) => void },
+  bridge: AllowPathBridge,
 ): void {
   // Pre-compile regex patterns for performance
   const denyPatterns = config.deny.map(compileRegex);
@@ -306,6 +308,17 @@ export function registerPreExecute(
             sessionId: sid,
             detail: `curated allowPath: ${allowPathTargets.join(', ')}`,
           });
+          // Approval bridge (2026-08-31): the approval/request payload does not
+          // carry args/paths, so the approval answerer cannot re-run this exact
+          // allowPath proof. Record the deterministic verdict against the call's
+          // callId — `approveEscalation` forwards the SAME callId into the
+          // approval request — so `decideAuto` can grant the escalation without
+          // classifier review. Deny patterns already ran first above; the breaker
+          // is not tripped here (this branch is inside the !breaker.isTripped
+          // block), so the bridge never bypasses either guard.
+          if (typeof exec?.callId === 'string' && exec.callId !== '') {
+            bridge.record(exec.callId, toolName, allowPathTargets);
+          }
           return next();
         }
 
