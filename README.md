@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/auto-mode-icon.png" width="128" alt="dsh-automode" />
-
 # dsh-automode ⚡
 
 **Claude Code–style auto mode for DeepSeek Harness** — let your agent run hands-free, while a deterministic guardrail and a cost-aware reviewer keep the dangerous stuff from ever executing.
@@ -16,11 +14,9 @@
 [![TypeScript](https://img.shields.io/github/languages/top/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
 [![DSH plugin](https://img.shields.io/badge/DSH%20plugin-ecosystem-2ea043)](https://github.com/topics/dsh-plugin)
 
+<img src="docs/auto-mode-icon.png" width="400" alt="dsh-automode in the permission picker" />
+
 </div>
-
-![Auto-mode tool-call guard pipeline](docs/auto-mode-flow.png)
-
-> 🖱️ **Interactive version**: [docs/auto-mode-flow.html](docs/auto-mode-flow.html) — pan/zoom, relationship tracing, dark mode. Diagram source: [`docs/auto-mode-flow.workflow.json`](docs/auto-mode-flow.workflow.json).
 
 ---
 
@@ -63,8 +59,6 @@ dsh plugin add ./path/to/dsh-automode
 
 Restart `dsh web` after installing. The permission picker (bottom-left of the chat box) will show **Auto mode** alongside read-only / workspace-write / danger-full-access.
 
-![Auto mode in the permission picker](docs/auto-mode-icon.png)
-
 ## Commands
 
 ```text
@@ -93,6 +87,10 @@ Tool call arrives
        ⑤ Classifier (two-stage: one-token filter → structured review)
        ⑥ Failure → fail-closed
 ```
+
+![Auto-mode tool-call guard pipeline](docs/auto-mode-flow.png)
+
+> 🖱️ **Interactive version**: [docs/auto-mode-flow.html](docs/auto-mode-flow.html) — pan/zoom, relationship tracing, dark mode. Diagram source: [`docs/auto-mode-flow.workflow.json`](docs/auto-mode-flow.workflow.json).
 
 The pre-execute gate intercepts ALL tool calls (including those inside the workspace sandbox that would never trigger the approval waterfall). The approval waterfall only runs for calls that actually need sandbox escalation. The pre-execute gate only applies to **auto-mode** sessions; in other presets (read-only / workspace-write / danger-full-access) it is a no-op so it never contradicts the sandbox the user chose.
 

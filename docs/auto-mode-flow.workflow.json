@@ -6,7 +6,7 @@
     "quality_profile": "showcase",
     "visual_preset": "signal-flow",
     "output": "docs/auto-mode-flow.html",
-    "viewBox": [780, 1000]
+    "viewBox": [780, 750]
   },
   "lanes": [
     { "id": "call", "label": "Agent Runtime" },

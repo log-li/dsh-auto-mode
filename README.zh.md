@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/auto-mode-icon.png" width="128" alt="dsh-automode" />
-
 # dsh-automode ⚡
 
 **面向 DeepSeek Harness 的 Claude Code 风格自动模式：让 agent 放手自主执行，同时由确定性护栏 + 低成本复审模型把危险操作挡在执行之前。**
@@ -16,11 +14,9 @@
 [![TypeScript](https://img.shields.io/github/languages/top/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
 [![DSH plugin](https://img.shields.io/badge/DSH%20plugin-ecosystem-2ea043)](https://github.com/topics/dsh-plugin)
 
+<img src="docs/auto-mode-icon.png" width="400" alt="dsh-automode" />
+
 </div>
-
-![Auto mode 工具调用拦截管线](docs/auto-mode-flow.zh.png)
-
-> 🖱️ **可交互版本**：[docs/auto-mode-flow.zh.html](docs/auto-mode-flow.zh.html) —— 平移缩放、关系追踪、暗色模式。图表源数据：[`docs/auto-mode-flow.zh.workflow.json`](docs/auto-mode-flow.zh.workflow.json)。
 
 ---
 
@@ -63,8 +59,6 @@ dsh plugin add ./path/to/dsh-automode
 
 安装后重启 `dsh web`。权限选择器（聊天框左下角）会显示 **Auto mode**，与只读 / workspace-write / danger-full-access 并列。
 
-![权限选择器中的 Auto mode](docs/auto-mode-icon.png)
-
 ## 命令
 
 ```text
@@ -93,6 +87,10 @@ dsh plugin add ./path/to/dsh-automode
        ⑤ 分类器（两阶段：one-token 预筛 → 结构化裁决）
        ⑥ 失败 → fail-closed
 ```
+
+![Auto mode 工具调用拦截管线](docs/auto-mode-flow.zh.png)
+
+> 🖱️ **可交互版本**：[docs/auto-mode-flow.zh.html](docs/auto-mode-flow.zh.html) —— 平移缩放、关系追踪、暗色模式。图表源数据：[`docs/auto-mode-flow.zh.workflow.json`](docs/auto-mode-flow.zh.workflow.json)。
 
 pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来不会触发 approval 瀑布的那些）。approval 瀑布只对真正需要沙箱升级的调用运行。pre-execute 门**仅对 auto-mode 会话生效**；在其他 preset（read-only / workspace-write / danger-full-access）下它是 no-op，不会与你所选沙箱冲突。
 
