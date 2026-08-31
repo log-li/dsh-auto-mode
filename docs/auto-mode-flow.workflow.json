@@ -31,14 +31,15 @@
     { "id": "classifier", "lane": "waterfall", "col": 4, "type": "cloud", "width": 144, "height": 72, "label": "Two-stage Classifier", "sublabel": "filter → review", "tag": "fail-closed" },
     { "id": "rejected", "lane": "safety", "col": 3, "type": "security", "width": 104, "label": "Rejected", "sublabel": "reshape or ask" },
     { "id": "breaker", "lane": "safety", "col": 5, "width": 108, "type": "messagebus", "label": "Circuit Breaker", "sublabel": "human resumes", "tag": "3 / 20 DENY" },
-    { "id": "detallow", "lane": "exec", "col": 2, "type": "backend", "width": 116, "label": "Fast Approve", "sublabel": "zero-LLM approvals" },
+    { "id": "detallow", "lane": "exec", "col": 2, "type": "backend", "width": 116, "label": "Fast Approve", "sublabel": "zero-LLM · allowPath" },
     { "id": "execute", "lane": "exec", "col": 4, "type": "backend", "width": 112, "label": "Tool Executes", "sublabel": "returns result" }
   ],
   "edges": [
     { "id": "intercept", "from": "toolcall", "to": "gate", "role": "main" },
     { "id": "fastpath", "from": "gate", "to": "detallow", "fromSide": "bottom", "toSide": "top", "via": [[220, 520], [300, 520]], "role": "main" },
     { "id": "torun", "from": "detallow", "to": "execute", "fromSide": "right", "toSide": "left", "role": "main" },
-    { "id": "escalate", "from": "gate", "to": "softrules", "fromSide": "bottom", "toSide": "top", "label": "escalation intent", "variant": "emphasis", "labelAt": [286, 300] },
+    { "id": "escalate", "from": "gate", "to": "softrules", "fromSide": "bottom", "toSide": "top", "label": "other escalation", "variant": "emphasis", "labelAt": [286, 300] },
+    { "id": "allowesc", "from": "gate", "to": "execute", "fromSide": "right", "toSide": "right", "via": [[700, 243], [700, 615]], "label": "allowPath · skip classifier", "labelAt": [706, 430], "variant": "emphasis" },
     { "id": "harddeny", "from": "gate", "to": "rejected", "fromSide": "left", "toSide": "left", "via": [[144, 243], [144, 491]], "label": "deny regex", "labelAt": [146, 380], "variant": "security", "role": "error" },
     { "id": "review", "from": "softrules", "to": "classifier", "fromSide": "right", "toSide": "left", "route": "straight", "label": "cache miss" },
     { "id": "allowed", "from": "classifier", "to": "execute", "fromSide": "bottom", "toSide": "top", "label": "verdict: allow", "labelAt": [508, 436] },
@@ -53,6 +54,8 @@
         "Deny regexes hard-reject before any LLM call",
         "Allow prefix-globs approve with zero LLM cost",
         "Fast Approve = read-only tools, allow globs, in-tree ops",
+        "Targets inside config.allowPaths (file ops + bash write-commands) skip the classifier entirely",
+        "v0.10.0: allowPath escalations are auto-granted by the approval answerer via the call's callId (approval-bridge) — no classifier, no confirmation",
         "Unmatched non-escalating calls pass through to the DSH sandbox"
       ]
     },

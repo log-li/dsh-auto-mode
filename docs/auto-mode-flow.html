@@ -4981,12 +4981,13 @@
         <path data-edge-from="toolcall" data-edge-to="gate" data-edge-key="0" data-edge-id="intercept" data-composition-points="88,145;88,243;158,243" d="M 88 145 L 88 243 L 158 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="gate" data-edge-to="detallow" data-edge-key="1" data-edge-id="fastpath" data-composition-points="220,279;220,520;300,520;300,589" d="M 220 279 L 220 520 L 300 520 L 300 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="detallow" data-edge-to="execute" data-edge-key="2" data-edge-id="torun" data-composition-points="358,615;444,615" d="M 358 615 L 444 615" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="gate" data-edge-to="softrules" data-edge-label="escalation intent" data-edge-key="3" data-edge-id="escalate" data-composition-points="220,279;220,290;300,290;300,331" d="M 220 279 L 220 290 L 300 290 L 300 331" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="gate" data-edge-to="rejected" data-edge-label="deny regex" data-edge-key="4" data-edge-id="harddeny" data-composition-points="158,243;144,243;144,491;378,491" d="M 158 243 L 144 243 L 144 491 L 378 491" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="softrules" data-edge-to="classifier" data-edge-label="cache miss" data-edge-key="5" data-edge-id="review" data-composition-points="358,367;428,367" d="M 358 367 L 428 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classifier" data-edge-to="execute" data-edge-label="verdict: allow" data-edge-key="6" data-edge-id="allowed" data-composition-points="500,403;500,476;500,476;500,589" d="M 500 403 L 500 476 L 500 476 L 500 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="7" data-edge-id="denied" data-composition-points="500,403;500,415;430,415;430,465" d="M 500 403 L 500 415 L 430 415 L 430 465" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="classifier" data-edge-to="breaker" data-edge-label="counts DENY" data-edge-key="8" data-edge-id="countdeny" data-composition-points="572,367;625,367;625,437;625,457" d="M 572 367 L 625 367 L 625 437 L 625 457" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="gate" data-edge-to="softrules" data-edge-label="other escalation" data-edge-key="3" data-edge-id="escalate" data-composition-points="220,279;220,290;300,290;300,331" d="M 220 279 L 220 290 L 300 290 L 300 331" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="gate" data-edge-to="execute" data-edge-label="allowPath · skip classifier" data-edge-key="4" data-edge-id="allowesc" data-composition-points="282,243;700,243;700,615;556,615" d="M 282 243 L 700 243 L 700 615 L 556 615" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="gate" data-edge-to="rejected" data-edge-label="deny regex" data-edge-key="5" data-edge-id="harddeny" data-composition-points="158,243;144,243;144,491;378,491" d="M 158 243 L 144 243 L 144 491 L 378 491" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="softrules" data-edge-to="classifier" data-edge-label="cache miss" data-edge-key="6" data-edge-id="review" data-composition-points="358,367;428,367" d="M 358 367 L 428 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classifier" data-edge-to="execute" data-edge-label="verdict: allow" data-edge-key="7" data-edge-id="allowed" data-composition-points="500,403;500,476;500,476;500,589" d="M 500 403 L 500 476 L 500 476 L 500 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="8" data-edge-id="denied" data-composition-points="500,403;500,415;430,415;430,465" d="M 500 403 L 500 415 L 430 415 L 430 465" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="classifier" data-edge-to="breaker" data-edge-label="counts DENY" data-edge-key="9" data-edge-id="countdeny" data-composition-points="572,367;625,367;625,437;625,457" d="M 572 367 L 625 367 L 625 437 L 625 457" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Nodes -->
         <g id="node-toolcall" data-node-id="toolcall" data-node-label="Tool Call" tabindex="0" role="button" aria-label="Focus Tool Call, pre-execution, Agent Runtime › Intercept" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="pre-execution" data-node-context="Agent Runtime › Intercept">
@@ -5067,15 +5068,15 @@
         <text data-detail="fine" x="625" y="513" class="t-messagebus" font-size="7" text-anchor="middle">3 / 20 DENY</text>
         </g>
 
-        <g id="node-detallow" data-node-id="detallow" data-node-label="Fast Approve" tabindex="0" role="button" aria-label="Focus Fast Approve, zero-LLM approvals, Execution Path › Decide" aria-pressed="false" data-node-kind="backend" data-node-sublabel="zero-LLM approvals" data-node-context="Execution Path › Decide">
-          <title>Fast Approve · zero-LLM approvals · Execution Path › Decide</title>
+        <g id="node-detallow" data-node-id="detallow" data-node-label="Fast Approve" tabindex="0" role="button" aria-label="Focus Fast Approve, zero-LLM · allowPath, Execution Path › Decide" aria-pressed="false" data-node-kind="backend" data-node-sublabel="zero-LLM · allowPath" data-node-context="Execution Path › Decide">
+          <title>Fast Approve · zero-LLM · allowPath · Execution Path › Decide</title>
           <rect x="242" y="589" width="116" height="52" rx="6" class="c-mask"/>
           <rect x="242" y="589" width="116" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(248 595) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label data-detail-anchor x="300" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Fast Approve</text>
-          <text data-detail="context" x="300" y="627" class="t-muted" font-size="8" text-anchor="middle">zero-LLM approvals</text>
+          <text data-detail="context" x="300" y="627" class="t-muted" font-size="8" text-anchor="middle">zero-LLM · allowPath</text>
         </g>
 
         <g id="node-execute" data-node-id="execute" data-node-label="Tool Executes" tabindex="0" role="button" aria-label="Focus Tool Executes, returns result, Execution Path › Execute" aria-pressed="false" data-node-kind="backend" data-node-sublabel="returns result" data-node-context="Execution Path › Execute">
@@ -5093,27 +5094,31 @@
 
 
 
-        <g data-detail="context" data-edge-from="gate" data-edge-to="softrules" data-edge-label="escalation intent" data-edge-key="3" data-edge-id="escalate">
-          <rect x="240.2" y="290" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="286" y="300" class="t-backend" font-size="8" text-anchor="middle">escalation intent</text>
+        <g data-detail="context" data-edge-from="gate" data-edge-to="softrules" data-edge-label="other escalation" data-edge-key="3" data-edge-id="escalate">
+          <rect x="242.6" y="290" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="286" y="300" class="t-backend" font-size="8" text-anchor="middle">other escalation</text>
         </g>
-        <g data-detail="context" data-edge-from="gate" data-edge-to="rejected" data-edge-label="deny regex" data-edge-key="4" data-edge-id="harddeny">
+        <g data-detail="context" data-edge-from="gate" data-edge-to="execute" data-edge-label="allowPath · skip classifier" data-edge-key="4" data-edge-id="allowesc">
+          <rect x="636.2" y="420" width="139.6" height="14" rx="3" class="c-mask"/>
+          <text x="706" y="430" class="t-backend" font-size="8" text-anchor="middle">allowPath · skip classifier</text>
+        </g>
+        <g data-detail="context" data-edge-from="gate" data-edge-to="rejected" data-edge-label="deny regex" data-edge-key="5" data-edge-id="harddeny">
           <rect x="117" y="370" width="58" height="14" rx="3" class="c-mask"/>
           <text x="146" y="380" class="t-security" font-size="8" text-anchor="middle">deny regex</text>
         </g>
-        <g data-detail="context" data-edge-from="softrules" data-edge-to="classifier" data-edge-label="cache miss" data-edge-key="5" data-edge-id="review">
+        <g data-detail="context" data-edge-from="softrules" data-edge-to="classifier" data-edge-label="cache miss" data-edge-key="6" data-edge-id="review">
           <rect x="364" y="347" width="58" height="14" rx="3" class="c-mask"/>
           <text x="393" y="357" class="t-muted" font-size="8" text-anchor="middle">cache miss</text>
         </g>
-        <g data-detail="context" data-edge-from="classifier" data-edge-to="execute" data-edge-label="verdict: allow" data-edge-key="6" data-edge-id="allowed">
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="execute" data-edge-label="verdict: allow" data-edge-key="7" data-edge-id="allowed">
           <rect x="469.4" y="426" width="77.2" height="14" rx="3" class="c-mask"/>
           <text x="508" y="436" class="t-muted" font-size="8" text-anchor="middle">verdict: allow</text>
         </g>
-        <g data-detail="context" data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="7" data-edge-id="denied">
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="8" data-edge-id="denied">
           <rect x="381.8" y="438" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="430" y="448" class="t-security" font-size="8" text-anchor="middle">DENY · fail-closed</text>
         </g>
-        <g data-detail="context" data-edge-from="classifier" data-edge-to="breaker" data-edge-label="counts DENY" data-edge-key="8" data-edge-id="countdeny">
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="breaker" data-edge-label="counts DENY" data-edge-key="9" data-edge-id="countdeny">
           <rect x="593.6" y="382" width="62.8" height="14" rx="3" class="c-mask"/>
           <text x="625" y="392" class="t-database" font-size="8" text-anchor="middle">counts DENY</text>
         </g>
@@ -5331,6 +5336,8 @@
           <li>&bull; Deny regexes hard-reject before any LLM call</li>
           <li>&bull; Allow prefix-globs approve with zero LLM cost</li>
           <li>&bull; Fast Approve = read-only tools, allow globs, in-tree ops</li>
+          <li>&bull; Targets inside config.allowPaths (file ops + bash write-commands) skip the classifier entirely</li>
+          <li>&bull; v0.10.0: allowPath escalations are auto-granted by the approval answerer via the call&#39;s callId (approval-bridge) — no classifier, no confirmation</li>
           <li>&bull; Unmatched non-escalating calls pass through to the DSH sandbox</li>
         </ul>
       </div>

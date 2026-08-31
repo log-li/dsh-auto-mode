@@ -4981,12 +4981,13 @@
         <path data-edge-from="toolcall" data-edge-to="gate" data-edge-key="0" data-edge-id="intercept" data-composition-points="88,145;88,243;158,243" d="M 88 145 L 88 243 L 158 243" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="gate" data-edge-to="detallow" data-edge-key="1" data-edge-id="fastpath" data-composition-points="220,279;220,520;300,520;300,589" d="M 220 279 L 220 520 L 300 520 L 300 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="detallow" data-edge-to="execute" data-edge-key="2" data-edge-id="torun" data-composition-points="358,615;444,615" d="M 358 615 L 444 615" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="gate" data-edge-to="softrules" data-edge-label="升级意图" data-edge-key="3" data-edge-id="escalate" data-composition-points="220,279;220,290;300,290;300,331" d="M 220 279 L 220 290 L 300 290 L 300 331" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="gate" data-edge-to="rejected" data-edge-label="命中 deny 正则" data-edge-key="4" data-edge-id="harddeny" data-composition-points="158,243;144,243;144,491;374,491" d="M 158 243 L 144 243 L 144 491 L 374 491" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="softrules" data-edge-to="classifier" data-edge-label="缓存未命中" data-edge-key="5" data-edge-id="review" data-composition-points="358,367;428,367" d="M 358 367 L 428 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classifier" data-edge-to="execute" data-edge-label="判决：放行" data-edge-key="6" data-edge-id="allowed" data-composition-points="500,403;500,476;500,476;500,589" d="M 500 403 L 500 476 L 500 476 L 500 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="7" data-edge-id="denied" data-composition-points="500,403;500,415;430,415;430,465" d="M 500 403 L 500 415 L 430 415 L 430 465" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="classifier" data-edge-to="breaker" data-edge-label="计入熔断计数" data-edge-key="8" data-edge-id="countdeny" data-composition-points="572,367;625,367;625,437;625,457" d="M 572 367 L 625 367 L 625 437 L 625 457" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="gate" data-edge-to="softrules" data-edge-label="其他提权" data-edge-key="3" data-edge-id="escalate" data-composition-points="220,279;220,290;300,290;300,331" d="M 220 279 L 220 290 L 300 290 L 300 331" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="gate" data-edge-to="execute" data-edge-label="allowPath · 跳过分类器" data-edge-key="4" data-edge-id="allowesc" data-composition-points="282,243;700,243;700,615;556,615" d="M 282 243 L 700 243 L 700 615 L 556 615" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="gate" data-edge-to="rejected" data-edge-label="命中 deny 正则" data-edge-key="5" data-edge-id="harddeny" data-composition-points="158,243;144,243;144,491;374,491" d="M 158 243 L 144 243 L 144 491 L 374 491" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="softrules" data-edge-to="classifier" data-edge-label="缓存未命中" data-edge-key="6" data-edge-id="review" data-composition-points="358,367;428,367" d="M 358 367 L 428 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classifier" data-edge-to="execute" data-edge-label="判决：放行" data-edge-key="7" data-edge-id="allowed" data-composition-points="500,403;500,476;500,476;500,589" d="M 500 403 L 500 476 L 500 476 L 500 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="8" data-edge-id="denied" data-composition-points="500,403;500,415;430,415;430,465" d="M 500 403 L 500 415 L 430 415 L 430 465" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="classifier" data-edge-to="breaker" data-edge-label="计入熔断计数" data-edge-key="9" data-edge-id="countdeny" data-composition-points="572,367;625,367;625,437;625,457" d="M 572 367 L 625 367 L 625 437 L 625 457" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Nodes -->
         <g id="node-toolcall" data-node-id="toolcall" data-node-label="工具调用" tabindex="0" role="button" aria-label="Focus 工具调用, 执行前拦截, Agent 运行时 › 拦截" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="执行前拦截" data-node-context="Agent 运行时 › 拦截">
@@ -5067,15 +5068,15 @@
         <text data-detail="fine" x="625" y="513" class="t-messagebus" font-size="7" text-anchor="middle">3 / 20 DENY</text>
         </g>
 
-        <g id="node-detallow" data-node-id="detallow" data-node-label="快速放行" tabindex="0" role="button" aria-label="Focus 快速放行, 零 LLM 开销, 执行路径 › 判定" aria-pressed="false" data-node-kind="backend" data-node-sublabel="零 LLM 开销" data-node-context="执行路径 › 判定">
-          <title>快速放行 · 零 LLM 开销 · 执行路径 › 判定</title>
+        <g id="node-detallow" data-node-id="detallow" data-node-label="快速放行" tabindex="0" role="button" aria-label="Focus 快速放行, 零 LLM · allowPath, 执行路径 › 判定" aria-pressed="false" data-node-kind="backend" data-node-sublabel="零 LLM · allowPath" data-node-context="执行路径 › 判定">
+          <title>快速放行 · 零 LLM · allowPath · 执行路径 › 判定</title>
           <rect x="242" y="589" width="116" height="52" rx="6" class="c-mask"/>
           <rect x="242" y="589" width="116" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(248 595) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label data-detail-anchor x="300" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">快速放行</text>
-          <text data-detail="context" x="300" y="627" class="t-muted" font-size="8" text-anchor="middle">零 LLM 开销</text>
+          <text data-detail="context" x="300" y="627" class="t-muted" font-size="8" text-anchor="middle">零 LLM · allowPath</text>
         </g>
 
         <g id="node-execute" data-node-id="execute" data-node-label="工具执行" tabindex="0" role="button" aria-label="Focus 工具执行, 结果返回 agent, 执行路径 › 执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="结果返回 agent" data-node-context="执行路径 › 执行">
@@ -5093,27 +5094,31 @@
 
 
 
-        <g data-detail="context" data-edge-from="gate" data-edge-to="softrules" data-edge-label="升级意图" data-edge-key="3" data-edge-id="escalate">
+        <g data-detail="context" data-edge-from="gate" data-edge-to="softrules" data-edge-label="其他提权" data-edge-key="3" data-edge-id="escalate">
           <rect x="261.8" y="290" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="286" y="300" class="t-backend" font-size="8" text-anchor="middle">升级意图</text>
+          <text x="286" y="300" class="t-backend" font-size="8" text-anchor="middle">其他提权</text>
         </g>
-        <g data-detail="context" data-edge-from="gate" data-edge-to="rejected" data-edge-label="命中 deny 正则" data-edge-key="4" data-edge-id="harddeny">
+        <g data-detail="context" data-edge-from="gate" data-edge-to="execute" data-edge-label="allowPath · 跳过分类器" data-edge-key="4" data-edge-id="allowesc">
+          <rect x="648.2" y="420" width="115.6" height="14" rx="3" class="c-mask"/>
+          <text x="706" y="430" class="t-backend" font-size="8" text-anchor="middle">allowPath · 跳过分类器</text>
+        </g>
+        <g data-detail="context" data-edge-from="gate" data-edge-to="rejected" data-edge-label="命中 deny 正则" data-edge-key="5" data-edge-id="harddeny">
           <rect x="107.4" y="370" width="77.2" height="14" rx="3" class="c-mask"/>
           <text x="146" y="380" class="t-security" font-size="8" text-anchor="middle">命中 deny 正则</text>
         </g>
-        <g data-detail="context" data-edge-from="softrules" data-edge-to="classifier" data-edge-label="缓存未命中" data-edge-key="5" data-edge-id="review">
+        <g data-detail="context" data-edge-from="softrules" data-edge-to="classifier" data-edge-label="缓存未命中" data-edge-key="6" data-edge-id="review">
           <rect x="364" y="347" width="58" height="14" rx="3" class="c-mask"/>
           <text x="393" y="357" class="t-muted" font-size="8" text-anchor="middle">缓存未命中</text>
         </g>
-        <g data-detail="context" data-edge-from="classifier" data-edge-to="execute" data-edge-label="判决：放行" data-edge-key="6" data-edge-id="allowed">
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="execute" data-edge-label="判决：放行" data-edge-key="7" data-edge-id="allowed">
           <rect x="479" y="426" width="58" height="14" rx="3" class="c-mask"/>
           <text x="508" y="436" class="t-muted" font-size="8" text-anchor="middle">判决：放行</text>
         </g>
-        <g data-detail="context" data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="7" data-edge-id="denied">
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="rejected" data-edge-label="DENY · fail-closed" data-edge-key="8" data-edge-id="denied">
           <rect x="381.8" y="438" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="430" y="448" class="t-security" font-size="8" text-anchor="middle">DENY · fail-closed</text>
         </g>
-        <g data-detail="context" data-edge-from="classifier" data-edge-to="breaker" data-edge-label="计入熔断计数" data-edge-key="8" data-edge-id="countdeny">
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="breaker" data-edge-label="计入熔断计数" data-edge-key="9" data-edge-id="countdeny">
           <rect x="591.2" y="382" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="625" y="392" class="t-database" font-size="8" text-anchor="middle">计入熔断计数</text>
         </g>
@@ -5331,6 +5336,8 @@
           <li>&bull; deny 正则在任何 LLM 调用之前硬拒绝</li>
           <li>&bull; allow 前缀通配零 LLM 成本直接放行</li>
           <li>&bull; 快速放行 = 只读工具 + allow 规则 + 树内文件操作</li>
+          <li>&bull; 目标落在 config.allowPaths 内（文件操作 + bash 写命令）完全跳过分类器</li>
+          <li>&bull; v0.10.0：allowPath 提权由 approval answerer 依调用 callId 自动放行（approval-bridge）——不经分类器、无需确认</li>
           <li>&bull; 未匹配且不升级的调用直通 DSH 沙箱</li>
         </ul>
       </div>

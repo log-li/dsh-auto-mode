@@ -31,14 +31,15 @@
     { "id": "classifier", "lane": "waterfall", "col": 4, "type": "cloud", "width": 144, "height": 72, "label": "两阶段分类器", "sublabel": "粗筛 → 结构化复审", "tag": "fail-closed" },
     { "id": "rejected", "lane": "safety", "col": 3, "type": "security", "width": 112, "label": "拒绝", "sublabel": "改写或询问用户" },
     { "id": "breaker", "lane": "safety", "col": 5, "width": 108, "type": "messagebus", "label": "熔断器", "sublabel": "人工恢复", "tag": "3 / 20 DENY" },
-    { "id": "detallow", "lane": "exec", "col": 2, "type": "backend", "width": 116, "label": "快速放行", "sublabel": "零 LLM 开销" },
+    { "id": "detallow", "lane": "exec", "col": 2, "type": "backend", "width": 116, "label": "快速放行", "sublabel": "零 LLM · allowPath" },
     { "id": "execute", "lane": "exec", "col": 4, "type": "backend", "width": 112, "label": "工具执行", "sublabel": "结果返回 agent" }
   ],
   "edges": [
     { "id": "intercept", "from": "toolcall", "to": "gate", "role": "main" },
     { "id": "fastpath", "from": "gate", "to": "detallow", "fromSide": "bottom", "toSide": "top", "via": [[220, 520], [300, 520]], "role": "main" },
     { "id": "torun", "from": "detallow", "to": "execute", "fromSide": "right", "toSide": "left", "role": "main" },
-    { "id": "escalate", "from": "gate", "to": "softrules", "fromSide": "bottom", "toSide": "top", "label": "升级意图", "variant": "emphasis", "labelAt": [286, 300] },
+    { "id": "escalate", "from": "gate", "to": "softrules", "fromSide": "bottom", "toSide": "top", "label": "其他提权", "variant": "emphasis", "labelAt": [286, 300] },
+    { "id": "allowesc", "from": "gate", "to": "execute", "fromSide": "right", "toSide": "right", "via": [[700, 243], [700, 615]], "label": "allowPath · 跳过分类器", "labelAt": [706, 430], "variant": "emphasis" },
     { "id": "harddeny", "from": "gate", "to": "rejected", "fromSide": "left", "toSide": "left", "via": [[144, 243], [144, 491]], "label": "命中 deny 正则", "labelAt": [146, 380], "variant": "security", "role": "error" },
     { "id": "review", "from": "softrules", "to": "classifier", "fromSide": "right", "toSide": "left", "route": "straight", "label": "缓存未命中" },
     { "id": "allowed", "from": "classifier", "to": "execute", "fromSide": "bottom", "toSide": "top", "label": "判决：放行", "labelAt": [508, 436] },
@@ -53,6 +54,8 @@
         "deny 正则在任何 LLM 调用之前硬拒绝",
         "allow 前缀通配零 LLM 成本直接放行",
         "快速放行 = 只读工具 + allow 规则 + 树内文件操作",
+        "目标落在 config.allowPaths 内（文件操作 + bash 写命令）完全跳过分类器",
+        "v0.10.0：allowPath 提权由 approval answerer 依调用 callId 自动放行（approval-bridge）——不经分类器、无需确认",
         "未匹配且不升级的调用直通 DSH 沙箱"
       ]
     },
