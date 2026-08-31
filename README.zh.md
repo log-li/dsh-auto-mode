@@ -1,17 +1,53 @@
-# dsh-automode
+<div align="center">
 
-[![npm](https://img.shields.io/npm/v/@log.li/dsh-automode)](https://www.npmjs.com/package/@log.li/dsh-automode)
-[![license](https://img.shields.io/npm/l/@log.li/dsh-automode)](./LICENSE)
+<img src="docs/auto-mode-icon.png" width="128" alt="dsh-automode" />
+
+# dsh-automode ⚡
+
+**面向 DeepSeek Harness 的 Claude Code 风格自动模式：让 agent 放手自主执行，同时由确定性护栏 + 低成本复审模型把危险操作挡在执行之前。**
 
 > 🌐 **简体中文**: [README.zh.md](./README.zh.md) · **English**: [README.md](./README.md)
 
-面向 DeepSeek Harness 的 Claude Code 风格自动模式。
+[![npm](https://img.shields.io/npm/v/@log.li/dsh-automode)](https://www.npmjs.com/package/@log.li/dsh-automode)
+[![npm downloads](https://img.shields.io/npm/dm/@log.li/dsh-automode)](https://www.npmjs.com/package/@log.li/dsh-automode)
+[![license](https://img.shields.io/npm/l/@log.li/dsh-automode)](./LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
+[![GitHub last commit](https://img.shields.io/github/last-commit/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
+[![TypeScript](https://img.shields.io/github/languages/top/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
+[![DSH plugin](https://img.shields.io/badge/DSH%20plugin-ecosystem-2ea043)](https://github.com/topics/dsh-plugin)
 
-这是一个护栏（guardrail）插件。它在 agent 工具调用执行前进行拦截，阻止命中确定性 deny 规则、或 auto-mode 分类器判定为 block 的操作。
+</div>
 
-它**不是一个沙箱**。插件运行在 DSH 进程内，一个蓄意恶意的插件可以做你用户账户能做的任何事。用它来降低不安全的自主工具使用，而不是作为 OS 安全边界。
+![Auto mode 工具调用拦截管线](docs/auto-mode-flow.zh.png)
 
-![权限选择器中的 Auto mode](docs/auto-mode-icon.png)
+> 🖱️ **可交互版本**：[docs/auto-mode-flow.zh.html](docs/auto-mode-flow.zh.html) —— 平移缩放、关系追踪、暗色模式。图表源数据：[`docs/auto-mode-flow.zh.workflow.json`](docs/auto-mode-flow.zh.workflow.json)。
+
+---
+
+dsh-automode 是护栏插件，介于 agent 与 harness 之间，在**每次工具调用执行前**拦截——硬 `deny` 规则与 curated `allowPaths` 确定性裁决（零 LLM 开销），其余交给两阶段分类器。安全操作全自动放行；危险操作被拦截、改写或转交给你。
+
+## ✨ 核心特性
+
+- 🛡️ **确定性第一道防线** —— 正则 `deny` 频带在任何 LLM 调用之前硬拒外泄、密钥与系统路径；前缀 glob `allow` 规则零成本放行常规命令。
+- ⚡ **零确认白名单** —— `config.allowPaths` 即全信任：其中文件操作与 bash 写命令完全跳过分类器，提权调用经 approval 桥接自动放行（v0.10.0）——不弹窗、不来回。
+- 🧠 **省成本的两阶段分类器** —— 约 1 token 的粗筛预判，仅命中项进入结构化复审；相同动作 5 分钟内复用判决缓存。
+- 🔁 **熔断器 + 人工兜底** —— 连续 3 次（或累计 20 次）DENY 暂停自动模式并转人工；一次人工决定即恢复并清零。
+- 📜 **完整审计轨迹** —— 每次 allow / deny / bridge 决定都追加到 `~/.dsh/auto-mode/decisions.jsonl`。
+- 🔌 **原生预设** —— 权限选择器一键开启或 `/auto`；与只读 / workspace-write / danger-full-access 并存。
+
+> ⚠️ **它不是沙箱**。插件运行在 DSH 进程内，蓄意恶意的插件可以做你用户账户能做的任何事。它用于降低不安全的自主工具使用，而不是 OS 安全边界。
+
+## 📚 目录
+
+- [安装](#安装)
+- [命令](#命令)
+- [工作原理](#工作原理)
+- [规则](#规则)
+- [配置](#配置)
+- [日志](#日志)
+- [架构](#架构)
+- [兼容性与贡献](#兼容性与贡献)
+- [许可证](#许可证)
 
 ## 安装
 
@@ -26,6 +62,8 @@ dsh plugin add ./path/to/dsh-automode
 ```
 
 安装后重启 `dsh web`。权限选择器（聊天框左下角）会显示 **Auto mode**，与只读 / workspace-write / danger-full-access 并列。
+
+![权限选择器中的 Auto mode](docs/auto-mode-icon.png)
 
 ## 命令
 
@@ -55,10 +93,6 @@ dsh plugin add ./path/to/dsh-automode
        ⑤ 分类器（两阶段：one-token 预筛 → 结构化裁决）
        ⑥ 失败 → fail-closed
 ```
-
-![Auto mode 工具调用拦截管线](docs/auto-mode-flow.zh.png)
-
-> 🖱️ **可交互版本**：[docs/auto-mode-flow.zh.html](docs/auto-mode-flow.zh.html) —— 平移缩放、关系追踪、暗色模式。图表源数据：[`docs/auto-mode-flow.zh.workflow.json`](docs/auto-mode-flow.zh.workflow.json)。
 
 pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来不会触发 approval 瀑布的那些）。approval 瀑布只对真正需要沙箱升级的调用运行。pre-execute 门**仅对 auto-mode 会话生效**；在其他 preset（read-only / workspace-write / danger-full-access）下它是 no-op，不会与你所选沙箱冲突。
 

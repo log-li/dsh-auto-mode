@@ -1,17 +1,53 @@
-# dsh-automode
+<div align="center">
 
-[![npm](https://img.shields.io/npm/v/@log.li/dsh-automode)](https://www.npmjs.com/package/@log.li/dsh-automode)
-[![license](https://img.shields.io/npm/l/@log.li/dsh-automode)](./LICENSE)
+<img src="docs/auto-mode-icon.png" width="128" alt="dsh-automode" />
+
+# dsh-automode ⚡
+
+**Claude Code–style auto mode for DeepSeek Harness** — let your agent run hands-free, while a deterministic guardrail and a cost-aware reviewer keep the dangerous stuff from ever executing.
 
 > 🌐 **简体中文**: [README.zh.md](./README.zh.md) · **English**: [README.md](./README.md)
 
-Claude Code-style auto mode for DeepSeek Harness.
+[![npm](https://img.shields.io/npm/v/@log.li/dsh-automode)](https://www.npmjs.com/package/@log.li/dsh-automode)
+[![npm downloads](https://img.shields.io/npm/dm/@log.li/dsh-automode)](https://www.npmjs.com/package/@log.li/dsh-automode)
+[![license](https://img.shields.io/npm/l/@log.li/dsh-automode)](./LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
+[![GitHub last commit](https://img.shields.io/github/last-commit/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
+[![TypeScript](https://img.shields.io/github/languages/top/log-li/dsh-automode)](https://github.com/log-li/dsh-automode)
+[![DSH plugin](https://img.shields.io/badge/DSH%20plugin-ecosystem-2ea043)](https://github.com/topics/dsh-plugin)
 
-This is a guardrail plugin. It intercepts agent tool calls before execution and blocks actions that match deterministic deny rules, or the auto-mode classifier's block decision.
+</div>
 
-It is not a sandbox. The plugin runs in the DSH process, and a determined malicious plugin can do anything your user account can do. Use this to reduce unsafe autonomous tool use, not as an OS security boundary.
+![Auto-mode tool-call guard pipeline](docs/auto-mode-flow.png)
 
-![Auto mode in the permission picker](docs/auto-mode-icon.png)
+> 🖱️ **Interactive version**: [docs/auto-mode-flow.html](docs/auto-mode-flow.html) — pan/zoom, relationship tracing, dark mode. Diagram source: [`docs/auto-mode-flow.workflow.json`](docs/auto-mode-flow.workflow.json).
+
+---
+
+dsh-automode sits between your agent and the harness. It intercepts every tool call **before execution** — hard `deny` rules and curated `allowPaths` decide deterministically (zero LLM cost), and whatever is left goes to a two-stage classifier. Safe actions run on their own; risky ones are blocked, reshaped, or routed to you.
+
+## ✨ Key features
+
+- 🛡️ **Deterministic first line** — regex `deny` bands hard-block exfiltration, secrets, and system paths before any LLM call; prefix-glob `allow` rules approve routine commands for free.
+- ⚡ **Zero-confirmation allowlist** — `config.allowPaths` is full trust: file ops and bash writes inside it skip the classifier entirely, and escalated calls are auto-granted through the approval bridge (v0.10.0) — no prompt, no round-trip.
+- 🧠 **Cost-aware two-stage classifier** — a one-token filter pre-screens; only flagged actions get the structured review, and identical actions reuse the verdict cache for 5 minutes.
+- 🔁 **Circuit breaker + human fallback** — 3 consecutive (or 20 total) DENYs pause auto mode and route decisions to a human; one human decision resumes and resets.
+- 📜 **Full audit trail** — every allow / deny / bridge decision is appended to `~/.dsh/auto-mode/decisions.jsonl`.
+- 🔌 **Native preset** — flip it on from the permission picker or `/auto`; it plays nicely alongside read-only / workspace-write / danger-full-access.
+
+> ⚠️ **Not a sandbox.** The plugin runs inside the DSH process; a deliberately malicious plugin can do anything your user account can do. It reduces unsafe autonomous tool use — it is not an OS security boundary.
+
+## 📚 Table of contents
+
+- [Install](#install)
+- [Commands](#commands)
+- [How it works](#how-it-works)
+- [Rules](#rules)
+- [Configuration](#configuration)
+- [Logging](#logging)
+- [Architecture](#architecture)
+- [Compatibility & contributions](#compatibility--contributions)
+- [License](#license)
 
 ## Install
 
@@ -26,6 +62,8 @@ dsh plugin add ./path/to/dsh-automode
 ```
 
 Restart `dsh web` after installing. The permission picker (bottom-left of the chat box) will show **Auto mode** alongside read-only / workspace-write / danger-full-access.
+
+![Auto mode in the permission picker](docs/auto-mode-icon.png)
 
 ## Commands
 
@@ -55,10 +93,6 @@ Tool call arrives
        ⑤ Classifier (two-stage: one-token filter → structured review)
        ⑥ Failure → fail-closed
 ```
-
-![Auto mode tool-call guard pipeline](docs/auto-mode-flow.png)
-
-> 🖱️ **Interactive version**: [docs/auto-mode-flow.html](docs/auto-mode-flow.html) — pan/zoom, relationship tracing, dark mode. Diagram source: [`docs/auto-mode-flow.workflow.json`](docs/auto-mode-flow.workflow.json).
 
 The pre-execute gate intercepts ALL tool calls (including those inside the workspace sandbox that would never trigger the approval waterfall). The approval waterfall only runs for calls that actually need sandbox escalation. The pre-execute gate only applies to **auto-mode** sessions; in other presets (read-only / workspace-write / danger-full-access) it is a no-op so it never contradicts the sandbox the user chose.
 
