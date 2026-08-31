@@ -80,6 +80,12 @@ export declare function renderTranscript(messages: readonly Message[], maxMessag
  * when judging whether an action serves the current request. Standalone
  * assistant/tool turns are dropped on purpose: repository text and tool
  * output MUST NOT grant permission (only direct human messages can).
+ *
+ * One exception (spec 2026-08-31): the user's answer to an
+ * `ask_user_question` tool call IS a direct human authorization given through
+ * the tool — it is folded into the intent window (as a `user:` line) so the
+ * verdict-cache signature changes and a stale DENY no longer swallows a
+ * fresh tool-based grant (M-34: every verdict input belongs in the cache key).
  */
 export declare function renderUserIntent(messages: readonly Message[], maxMessages: number): string;
 /** Truncate a rendered context block to a char budget (classifyContextChars). */

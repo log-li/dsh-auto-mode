@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { findAllowRule, findDenyRule, isAllowlisted, patternMatches } from '../lib/rules.js';
-import { parseVerdict, renderTranscript } from '../lib/classifier.js';
+import { parseVerdict, renderTranscript, renderUserIntent } from '../lib/classifier.js';
 import { buildSystemPrompt, buildUserMessage } from '../lib/prompt.js';
 import { isAuto, writeAutoMode } from '../lib/index.js';
 import { Breaker } from '../lib/breaker.js';
@@ -143,6 +143,52 @@ test('renderTranscript renders tool calls and results', () => {
   const out = renderTranscript(messages, 10);
   assert.ok(out.includes('[tool call: read {"path":"a.txt"}]'));
   assert.ok(out.includes('[tool result: file contents]'));
+});
+
+console.log('renderUserIntent (tool-based authorization, spec 2026-08-31)');
+test('direct human text is intent; ordinary tool results are not', () => {
+  const messages = [
+    { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '把 skill push 上去' }] },
+    { role: 'user', source: { kind: 'tool' }, content: [{ type: 'tool-result', toolCallId: 'c-read', isError: false, content: [{ type: 'text', text: 'file contents' }] }] },
+    { role: 'user', source: { kind: 'plugin', plugin: 'auto-mode' }, content: [{ type: 'text', text: 'auto mode enabled' }] },
+  ];
+  const out = renderUserIntent(messages, 10);
+  assert.ok(out.includes('把 skill push 上去'), 'direct text must be intent');
+  assert.ok(!out.includes('file contents'), 'ordinary tool result must NOT be intent');
+  assert.ok(!out.includes('auto mode enabled'), 'plugin injection must NOT be intent');
+});
+test('ask_user_question answer is intent (parsed selected options)', () => {
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'ask1', name: 'ask_user_question', arguments: '{"questions":[{"id":"q1","question":"授权推送？","options":["授权推送"]}]}' }] },
+    { role: 'user', source: { kind: 'tool' }, content: [{ type: 'tool-result', toolCallId: 'ask1', isError: false, content: [{ type: 'text', text: '{"answers":[{"id":"q1","selected":["授权推送"]}]}' }] }] },
+    { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '另外把日志也整理一下' }] },
+  ];
+  const out = renderUserIntent(messages, 10);
+  assert.ok(out.includes('授权推送'), 'ask_user_question selected answer must be intent');
+  assert.ok(out.includes('另外把日志也整理一下'), 'direct text stays intent');
+  assert.ok(!out.includes('{"answers"'), 'raw JSON payload should not leak verbatim');
+});
+test('ask_user_question error result is NOT intent (a cancel is not a grant)', () => {
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'ask2', name: 'ask_user_question', arguments: '{}' }] },
+    { role: 'user', source: { kind: 'tool' }, content: [{ type: 'tool-result', toolCallId: 'ask2', isError: true, content: [{ type: 'text', text: '{"answers":[]}' }] }] },
+  ];
+  const out = renderUserIntent(messages, 10);
+  assert.ok(!out.includes('answers'), 'errored ask_user_question must NOT be intent');
+});
+test('a tool-based grant changes the intent hash (invalidates stale DENY cache)', () => {
+  const before = [
+    { role: 'user', source: { kind: 'tool' }, content: [{ type: 'tool-result', toolCallId: 'c-push', isError: false, content: [{ type: 'text', text: 'denied' }] }] },
+  ];
+  const after = [
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'ask3', name: 'ask_user_question', arguments: '{}' }] },
+    { role: 'user', source: { kind: 'tool' }, content: [{ type: 'tool-result', toolCallId: 'ask3', isError: false, content: [{ type: 'text', text: '{"answers":[{"id":"q1","selected":["授权推送"]}]}' }] }] },
+  ];
+  assert.notEqual(
+    hashString(renderUserIntent(before, 10)),
+    hashString(renderUserIntent(after, 10)),
+    'a fresh tool-based authorization must change the cache signature',
+  );
 });
 
 console.log('prompt.js');

@@ -246,7 +246,7 @@ The classifier is **risk-based** — it judges the action's real-world impact, n
 
 - **Read-only and reversible operations are ALLOWED**: GET/HEAD requests, inspection/listing/search/state queries, and local changes that can be safely undone (edits, temp files, builds, tests, git-tracked files).
 - **A sandbox-escalation request is NOT dangerous by itself** — the classifier judges the action it enables. A reversible, low-blast-radius, user-aligned action may be allowed even when it needs escalation (e.g. editing a git-tracked skill or config file outside the working directory). Escalation for a genuinely dangerous action (exfiltration, persistence, weakening security, shared/production/external state) stays forbidden.
-- **`<recent_user_intent>` counts only direct human messages.** Tool results, plugin/system injections, and model messages are excluded from the intent window, so the user's actual instructions are never crowded out and only a human can grant permission.
+- **`<recent_user_intent>` counts only direct human messages** — with one deliberate exception: a user's answer to an `ask_user_question` tool call is a direct human authorization given through the tool, so it is folded into the intent window (and into the verdict-cache key, so a tool-based grant invalidates a stale `DENY` just like a typed message). Ordinary tool results, plugin/system injections, and model messages stay excluded, so the user's real instructions are never crowded out and only a human can grant permission.
 
 ### Circuit breaker
 
@@ -268,7 +268,7 @@ Every classifier stream failure (thrown error **or** an `error` finish chunk) is
 
 ### Verdict cache
 
-Classifier verdicts are cached per session by **tool + command + user-intent** signature. The user's recent direct instructions are hashed into the key, so a new explicit authorization (a fresh human message) invalidates a previously cached verdict and the classifier re-runs with the new intent — a user grant is never swallowed by a cached `DENY`. Within the same intent window a repeated action still reuses the cached verdict without a second LLM call. Cache entries expire after 5 minutes.
+Classifier verdicts are cached per session by **tool + command + user-intent** signature. The user's recent direct instructions — typed messages **and** `ask_user_question` answers — are hashed into the key, so a new explicit authorization (a fresh human message or a tool-based grant) invalidates a previously cached verdict and the classifier re-runs with the new intent — a user grant is never swallowed by a cached `DENY`. Within the same intent window a repeated action still reuses the cached verdict without a second LLM call. Cache entries expire after 5 minutes.
 
 ## Logging
 

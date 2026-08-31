@@ -235,6 +235,54 @@ export function renderTranscript(
   return tail.map(renderMessage).join('\n\n');
 }
 
+/** toolCallId → tool name across the window, to recognize ask_user_question results. */
+function toolNameByCallId(messages: readonly Message[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const b of m.content) {
+      if (b.type === 'tool-call') names.set(b.id, b.name);
+    }
+  }
+  return names;
+}
+
+/** Whether this user message carries a non-error `ask_user_question` answer. */
+function hasAskUserAnswer(message: Message, toolNames: Map<string, string>): boolean {
+  for (const b of message.content) {
+    if (b.type === 'tool-result' && !b.isError && toolNames.get(b.toolCallId) === 'ask_user_question') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The user's answers inside an `ask_user_question` tool result. The tool
+ * returns `{answers:[{id, selected:[...], custom?}]}` — an explicit
+ * authorization the user gave THROUGH the tool. Parsed for readable intent;
+ * if the payload is unparseable, the raw JSON text still counts as a signal.
+ */
+function askUserAnswersText(message: Message): string {
+  const parts: string[] = [];
+  for (const b of message.content) {
+    if (b.type !== 'tool-result') continue;
+    const text = b.content.map(renderBlock).filter(Boolean).join(' ');
+    const picked: string[] = [];
+    try {
+      const parsed = JSON.parse(text) as { answers?: Array<{ selected?: unknown; custom?: unknown }> };
+      for (const a of parsed?.answers ?? []) {
+        if (Array.isArray(a.selected)) for (const s of a.selected) if (typeof s === 'string') picked.push(s);
+        if (typeof a.custom === 'string' && a.custom) picked.push(a.custom);
+      }
+    } catch {
+      picked.push(text); // unparseable — still an intent signal
+    }
+    if (picked.length) parts.push(picked.join(', '));
+  }
+  return parts.join(' ');
+}
+
 /**
  * Render the user's RECENT explicit instructions (CC-style intent).
  *
@@ -243,11 +291,18 @@ export function renderTranscript(
  * when judging whether an action serves the current request. Standalone
  * assistant/tool turns are dropped on purpose: repository text and tool
  * output MUST NOT grant permission (only direct human messages can).
+ *
+ * One exception (spec 2026-08-31): the user's answer to an
+ * `ask_user_question` tool call IS a direct human authorization given through
+ * the tool — it is folded into the intent window (as a `user:` line) so the
+ * verdict-cache signature changes and a stale DENY no longer swallows a
+ * fresh tool-based grant (M-34: every verdict input belongs in the cache key).
  */
 export function renderUserIntent(
   messages: readonly Message[],
   maxMessages: number,
 ): string {
+  const toolNames = toolNameByCallId(messages);
   const userMsgs: string[] = [];
   for (let i = messages.length - 1; i >= 0 && userMsgs.length < maxMessages; i--) {
     const m = messages[i];
@@ -257,9 +312,18 @@ export function renderUserIntent(
     // injections, and model messages all carry role "user" but must NOT crowd
     // out the user's actual instructions from the intent window.
     const srcKind = (m.source as { kind?: string } | undefined)?.kind;
-    if (srcKind !== undefined && srcKind !== 'user') continue;
-    const text = m.content.map(renderBlock).filter(Boolean).join(' ');
-    if (text.trim()) userMsgs.unshift(`${m.role}: ${text}`);
+    if (srcKind === undefined || srcKind === 'user') {
+      const text = m.content.map(renderBlock).filter(Boolean).join(' ');
+      if (text.trim()) userMsgs.unshift(`${m.role}: ${text}`);
+      continue;
+    }
+    // Tool results: ONLY the user's answers to ask_user_question count as
+    // intent (an explicit authorization given through the tool). Ordinary
+    // tool output must not crowd the intent window.
+    if (srcKind === 'tool' && hasAskUserAnswer(m, toolNames)) {
+      const text = askUserAnswersText(m);
+      if (text.trim()) userMsgs.unshift(`user: ${text}`);
+    }
   }
   return userMsgs.join('\n\n');
 }
