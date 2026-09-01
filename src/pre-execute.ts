@@ -75,10 +75,16 @@ function trustRoots(allowPaths: readonly string[], cwd?: string): string[] {
   return [...new Set(roots)];
 }
 
-/** Whether `p` (symlink-resolved) is under any trust root. */
-function isInsideTrusted(p: string, roots: string[]): boolean {
+/** Whether `p` (symlink-resolved) is under any trust root.
+ * Relative paths are resolved against `base` (the session working directory)
+ * before the realpath/prefix match — the host process cwd must never be the
+ * resolution base for a session-relative file-tool path, or every in-workspace
+ * relative path (e.g. `_internal/log.md`) is misjudged out-of-tree (2026-09-01
+ * Bug A; see spec). Without `base`, behavior is the legacy process-cwd resolve. */
+export function isInsideTrusted(p: string, roots: string[], base?: string): boolean {
   if (!p) return false;
-  const rp = realpathSafe(p);
+  const abs = base ? resolve(base, p) : p;
+  const rp = realpathSafe(abs);
   return roots.some((root) => rp === root || rp.startsWith(root.endsWith(sep) ? root : root + sep));
 }
 
@@ -263,15 +269,16 @@ export function registerPreExecute(
       const isEscalation = typeof perm === 'string' && perm !== '';
       const targetPaths = isFileToolCall ? collectPaths(exec.arguments) : [];
       const roots = trustRoots(config.allowPaths, session.header?.cwd);
+      const wsBase = session.header?.cwd;
       const inTrusted = isFileToolCall && targetPaths.length > 0
-        && targetPaths.every((p) => isInsideTrusted(p, roots));
+        && targetPaths.every((p) => isInsideTrusted(p, roots, wsBase));
 
       if (config.allowInsideWorkingDirectory && isFileToolCall && inTrusted && !isEscalation) {
         appendDecision({
           event: 'pre-execute-allow',
           tool: toolName,
           sessionId: sid,
-          detail: 'in-tree / allowPath file op (path resolved)',
+          detail: `in-tree / allowPath file op (path resolved): ${targetPaths.join(', ')}`,
         });
         return next(); // real in-tree → allow
       }
@@ -301,7 +308,7 @@ export function registerPreExecute(
         // Curated allowPaths trust (Bug 6): real symlink-resolved prefix match, not substring.
         // Covers file tools (targetPaths) AND bash write-commands (bashTargets destination).
         const allowPathTargets = isFileToolCall ? targetPaths : bashTargets;
-        if (allowPathTargets.length > 0 && allowPathTargets.every((p) => isInsideTrusted(p, roots))) {
+        if (allowPathTargets.length > 0 && allowPathTargets.every((p) => isInsideTrusted(p, roots, wsBase))) {
           appendDecision({
             event: 'pre-execute-allow',
             tool: toolName,

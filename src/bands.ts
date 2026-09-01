@@ -126,20 +126,114 @@ const BASH_WRITE_COMMANDS = new Set([
 ]);
 
 /**
- * For a NON-composite bash command, return the destination path(s) it writes
- * into, or `[]` when the command is not a recognized file-writing command or
- * has no explicit destination. The destination is only ever the *target* of
- * the write; sources and unrelated path tokens are ignored.
+ * Non-writing utility commands allowed inside a COMPOSITE command without
+ * invalidating the allowPath fast path (2026-09-01 Issue B guard). Every other
+ * non-write command — side-effect commands (`kill`, `pkill`, `systemctl`,
+ * `launchctl`, `brew`, `docker`, …), interpreters (`sh`, `bash`, `python`,
+ * `node`), deletion (`rm`, `shred`), unknown commands — makes the WHOLE
+ * composite fall back to the classifier, so multi-step attacks like
+ * `curl -o /tmp/e … && bash /tmp/e` never get allowPath trust from their
+ * benign-looking write segment.
  */
-export function bashWriteDestinations(cmd: string): string[] {
-  if (!cmd || isCompositeShell(cmd)) return [];
-  const tokens = tokenizeShell(cmd.trim());
-  if (tokens.length < 2) return [];
-  const first = tokens[0] ?? '';
-  const base = first.split('/').pop() ?? first;
-  if (!BASH_WRITE_COMMANDS.has(base)) return [];
-  const argv = tokens.slice(1);
+const BENIGN_UTILITY_COMMANDS = new Set([
+  'echo', 'printf', 'ls', 'mkdir', 'test', '[', 'true', 'false', 'pwd',
+  'stat', 'file', 'wc', 'head', 'tail', 'which', 'dirname', 'basename',
+  'date', 'sleep', 'uname', 'id', 'du', 'df', 'sort', 'uniq', 'cat', 'trash',
+]);
 
+/**
+ * Split a composite shell command into top-level segments on `;`, `&&`, `||`,
+ * `|`, `&` and newlines — quote- and paren-aware, so a separator inside quotes
+ * or inside a `(...)` / `$(...)` group is literal (`(trash b; true)` is ONE
+ * segment).
+ */
+function splitShellSegments(cmd: string): string[] {
+  const segments: string[] = [];
+  let cur = '';
+  let quote: string | null = null;
+  let paren = 0;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i] ?? '';
+    if (quote) {
+      cur += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === '(') {
+      paren += 1;
+      cur += ch;
+      continue;
+    }
+    if (ch === ')') {
+      paren = Math.max(0, paren - 1);
+      cur += ch;
+      continue;
+    }
+    if (paren === 0 && (ch === ';' || ch === '\n' || ch === '|' || ch === '&')) {
+      if (cur.trim()) segments.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) segments.push(cur.trim());
+  return segments;
+}
+
+/**
+ * Parse a segment that is a pure `VAR=value` / `export VAR=value` assignment.
+ * Returns `[name, value]` or undefined. A value with unquoted whitespace is
+ * NOT a pure assignment (`FOO=bar cmd …` is a command, not an assignment).
+ */
+function parseAssignment(seg: string): [string, string] | undefined {
+  let s = seg.trim();
+  if (s.startsWith('export ')) s = s.slice('export '.length).trim();
+  const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(s);
+  if (!m) return undefined;
+  const val = m[2] ?? '';
+  const fullyQuoted =
+    (val.length >= 2 && val.startsWith('"') && val.endsWith('"')) ||
+    (val.length >= 2 && val.startsWith("'") && val.endsWith("'"));
+  if (val && !fullyQuoted && /\s/.test(val)) return undefined;
+  return [m[1] ?? '', fullyQuoted ? val.slice(1, -1) : val];
+}
+
+/**
+ * Expand `$VAR` / `${VAR}` tokens using the captured assignment map. Unknown
+ * variables are left literal — their destinations then fail the allowPath
+ * match and fall back to the classifier (fail-closed, never a false trust).
+ */
+function expandShellVars(text: string, vars: ReadonlyMap<string, string>): string {
+  return text.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, braced, plain) => {
+    const name = braced ?? plain;
+    return vars.has(name) ? (vars.get(name) as string) : whole;
+  });
+}
+
+/** Whether a segment contains an unquoted redirection (`>` / `>>`). */
+function hasUnquotedRedirect(seg: string): boolean {
+  let quote: string | null = null;
+  for (const ch of seg) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '>') return true;
+  }
+  return false;
+}
+
+/** Destination(s) one write-command argv writes into (see the switch below). */
+function destinationsOf(base: string, argv: string[]): string[] {
   switch (base) {
     case 'cp':
     case 'mv':
@@ -200,6 +294,73 @@ export function bashWriteDestinations(cmd: string): string[] {
     default:
       return [];
   }
+}
+
+/**
+ * Walk command segments, extracting write destinations into `dests` and
+ * capturing `VAR=…` assignments into `vars`. Returns false when any segment is
+ * not a recognized write command, a pure assignment, or a benign utility —
+ * the caller then falls back to the classifier for the WHOLE command.
+ */
+function collectSegmentDestinations(
+  cmd: string,
+  vars: Map<string, string>,
+  dests: string[],
+): boolean {
+  const segments = isCompositeShell(cmd) ? splitShellSegments(cmd) : [cmd.trim()];
+  for (const rawSeg of segments) {
+    const seg = rawSeg.trim();
+    if (!seg) continue;
+    // Subshell group `(…; …)` — recurse (carries the same variable map).
+    if (seg.startsWith('(') && seg.endsWith(')')) {
+      if (!collectSegmentDestinations(seg.slice(1, -1), vars, dests)) return false;
+      continue;
+    }
+    // Command substitution / process substitution (`…`, $(…), <(…)) executes
+    // arbitrary code we cannot statically verify — never allowPath-trust a
+    // segment containing one (`cp a $(rm -rf /) /tmp/b` would otherwise extract
+    // /tmp/b and let the substitution run; `<(rm -rf /)` is the process-
+    // substitution variant). Checked BEFORE assignment parsing so a
+    // `VAR="$(cmd)"` value is also refused (its expansion would smuggle the
+    // substitution into a later destination). Conservative: this also covers
+    // the non-composite backtick form, which is not flagged composite by
+    // isCompositeShell.
+    if (seg.includes('`') || seg.includes('$(') || seg.includes('<(')) return false;
+    const assign = parseAssignment(seg);
+    if (assign) {
+      vars.set(assign[0], assign[1]);
+      continue;
+    }
+    // Redirection writes to a file we do not model — never allowPath-trust it.
+    if (hasUnquotedRedirect(seg)) return false;
+    const tokens = tokenizeShell(seg);
+    if (tokens.length === 0) continue;
+    const expanded = tokens.map((t) => expandShellVars(t, vars));
+    const first = expanded[0] ?? '';
+    const base = first.split('/').pop() ?? first;
+    if (!BASH_WRITE_COMMANDS.has(base)) {
+      if (BENIGN_UTILITY_COMMANDS.has(base)) continue; // benign — no destination
+      return false; // side-effect / unknown command → whole composite falls back
+    }
+    dests.push(...destinationsOf(base, expanded.slice(1)));
+  }
+  return true;
+}
+
+/**
+ * For a bash command, return the destination path(s) it writes into, or `[]`
+ * when the command is not a recognized file-writing command, has no explicit
+ * destination, or is a composite whose segments contain anything outside the
+ * write / assignment / benign-utility set (those fall back to the classifier —
+ * 2026-09-01 Issue B). The destination is only ever the *target* of the
+ * write; sources and unrelated path tokens are ignored.
+ */
+export function bashWriteDestinations(cmd: string): string[] {
+  if (!cmd) return [];
+  const vars = new Map<string, string>([['HOME', process.env.HOME ?? '']]);
+  const dests: string[] = [];
+  if (!collectSegmentDestinations(cmd, vars, dests)) return [];
+  return [...new Set(dests)];
 }
 
 /** Whether `text` contains a permanent-deletion command. */

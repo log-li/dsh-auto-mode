@@ -18,6 +18,13 @@ import type { ConfigType } from './config.js';
 import { VerdictCache } from './cache.js';
 import { Breaker } from './breaker.js';
 import { AllowPathBridge } from './bridge.js';
+/** Whether `p` (symlink-resolved) is under any trust root.
+ * Relative paths are resolved against `base` (the session working directory)
+ * before the realpath/prefix match — the host process cwd must never be the
+ * resolution base for a session-relative file-tool path, or every in-workspace
+ * relative path (e.g. `_internal/log.md`) is misjudged out-of-tree (2026-09-01
+ * Bug A; see spec). Without `base`, behavior is the legacy process-cwd resolve. */
+export declare function isInsideTrusted(p: string, roots: string[], base?: string): boolean;
 /**
  * Injected at the moment the breaker trips so the model stops doing the
  * "try at current level → hit a denied error → then escalate" round-trip

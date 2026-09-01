@@ -152,7 +152,11 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
 
 只有被识别的写命令才会被信任（删除类命令 `rm`/`trash` 绝不会被白名单放行）；路径在 symlink 解析后匹配，`/Users/<you>/OneDrive - …` 软链与真实 `Library/CloudStorage/…` 路径都可用。下面的裁决缓存修复仍然重要：即便没有 allowPath，你一旦显式授权某个动作，分类器也会带着你的意图重跑，而不是回放旧的缓存拒绝。
 
+**复合写命令（v0.11.0）**。临时文件→替换的导出三步曲（如 `DIR=…; cp a b_tmp && (trash b; true) && mv b_tmp "$DIR/b"`）现在会按段解析（含 `VAR=…` 赋值跟踪与 `$VAR` 展开），其目标仍能命中 `allowPaths`。快速路径仍有守卫：复合命令若含副作用命令（`kill`、`pkill`、`rm`、`sh`、`bash`、网络/守护进程管理等）、命令替换（`` `…` ``、`$(…)`、`<(…)`）、重定向（`>`）或写/良性集之外的任何命令，一律回退分类器，与之前行为一致。复合内的良性工具（`trash`、`mkdir`、`echo` 等）随白名单快速路径搭车执行——一旦所有写目标都在白名单内，其副作用不再单独过分类器（删除目标本身永不进入白名单信任判定，`rm` 仍强制回退分类器）。
+
 **零确认提权（v0.10.0）**。allowlist 路径意味着**全信任**：请求放宽沙箱（`sandbox_permissions: danger-full-access`）进入 allowlist 路径的调用现在**无需任何确认、不经分类器直接放行**——pre-execute 门已确定性证明所有目标都在 `allowPath` 内，该结论通过调用的 `callId` 传给 approval answerer（审计日志呈现 `curated allowPath` → `approval-bridge` → `decision allowed-once`）。deny 频带仍最先执行（`~/.ssh/` 等 deny 路径即便在 allowPath 内也硬拒），熔断器也不会被绕过——跳闸期间 allowlist 调用仍走人工。
+
+**不是文件沙箱豁免**。`allowPaths` 只跳过**本插件**的评审——DSH 文件沙箱（会话文件策略）是独立一层，仍然生效。写 **workspace 外**的 allowlist 目录会被沙箱拦截，除非调用带 `sandbox_permissions: danger-full-access`；而该提权对 allowlist 路径经 approval 桥接**零评审自动放行**——所以第一次尝试就直接带上提权即可。
 
 每个 **auto-mode** 会话也会通过系统提示段（`auto-mode:allowlist`）获得这份知识：模型知道 per-profile 的 `allowPaths` 配置在哪、怎么改——动作被拦截时可以给出精确的配置修改建议，且**只有在你明确确认后**才会实际改动。
 

@@ -319,5 +319,63 @@ decision           write  outcome=rejected  reason="escalate sandbox to danger-f
 - E2E（重启 dsh 后，auto-mode 会话）：写 `~/.agents/` 无害测试文件（带 danger-full-access）→ decisions.jsonl 只出现 `curated allowPath` + `approval-bridge` + `allowed-once`，无 `outcome=rejected`；非白名单路径（`~/.zshrc`、`/etc/`）行为不变；deny 模式（`~/.ssh/`）仍硬拒。
 - **版本**：0.9.2 → **0.10.0**（行为变更：allowPath 提权调用零评审零确认自动放行）。
 
+## 会话实录：workspace 相对路径误判 + 复合命令白名单失效（2026-09-01 补记，已检查/已修复）
+
+> 本节记录 2026-09-01 实际会话中 auto-mode 暴露的四个问题，2026-09-01 当晚会话逐一核对源码并修复（v0.11.0）。均含实测证据（decisions.jsonl 判定记录 + 源码对照）。用户侧背景：Logan 两次提出质疑——「workspace 内的操作不应该过分类器」「OneDrive 在白名单为什么不能导出」。
+
+### Bug A：workspace 内「相对路径」file_path 被判 out-of-tree，误入分类器 ✅ 已修复（v0.11.0）
+
+- **现象（实测）**：auto-mode 会话中 `edit` 工具调用以**相对路径** `_internal/log.md`（绝对形式在 workspace 内，`cwd` 即 vault 根）被 `pre-execute-deny` 拦截，理由「Editing _internal/log.md is outside the trusted working directory and not clearly tied to the user's current request...」。同一会话编辑其他 workspace 内相对路径文件（`workspace/JC-STEM-2026/plan-draft/*.md`）同样被判 in-tree=false，只是因分类器「意图相关」而放行。
+- **证据（decisions.jsonl，2026-09-01）**：
+  - `{"tool":"edit","detail":"esc=false targets=[\"_internal/log.md\"] inTree=false outOfTree=true breaker=false cwd=/Users/logan/Library/Mobile Documents/iCloud~md~obsidian/Documents/Logans-vault ..."}`（同一目标两次 deny）
+  - 同类相对路径 `workspace/JC-STEM-2026/plan-draft/a-Goals-Objectives-draft-v1.md` 等亦 `inTree=false outOfTree=true`。
+- **根因（对照源码 pre-execute.js）**：`collectPaths`（line 67-81）原样取 `file_path` 的**相对路径**；`isInsideTrusted`（line 60-65）→ `realpathSafe(p)` 用**宿主进程 cwd**（DSH 进程 cwd，非 `session.header?.cwd`）解析相对路径。宿主进程 cwd ≠ 会话工作区根 → workspace 内相对路径解析后落在信任根（session cwd + allowPaths）之外 → `inTree=false` → 本应命中 line 226-247「in-tree → allow（不过分类器）」的捷径被跳过 → 错误进入分类器审查。
+- **影响**：① workspace 内文件操作被错误分流到分类器（额外延迟 + 依赖意图上下文，分类器对「意图不相关」的维护操作拒拦）；② 与当前请求意图不相关的 workspace 内维护操作（如 `_internal/log.md` 日志记录）被误拦——本会话连续 2 次记录日志被拒；③ 用户困惑「明明在 workspace 内为何要过分类器」。
+- **修复方向（已实现，2026-09-01）**：`isInsideTrusted(p, roots)` 增加第三参 `base`（会话工作区根）——`resolve(base, p)` 后再 realpath/前缀匹配；两个调用点（in-tree 捷径与 curated allowPath 判定）都传 `session.header?.cwd`。相对路径（`_internal/log.md`、`workspace/JC-STEM-2026/plan-draft/*.md`）现在正确解析到 workspace 内 → 命中 in-tree 捷径（不过分类器）。注意与 2026-08-23「路径归属 bug」区分：那条是 cwd **来源缺失**（`session.cwd` 恒 undefined → 改用 `session.header?.cwd`）；本条是 **cwd 已正确但相对路径未基于它 resolve**（`realpathSafe` 内部用进程 cwd），是同一 trustRoots 判定链上更深一层的问题——本次补上的是这一层。
+- **验证（2026-09-01）**：新增单测（相对路径 + base → in-tree；`../` 逃逸 workspace → 非 in-tree；绝对路径有无 base 行为不变；无 base 时保持旧行为）；`npm run build` + `npm test` 通过。
+
+### Issue B：复合 bash 导出命令使 OneDrive 白名单失效，approval 无法验证 ✅ 已修复（v0.11.0）
+
+- **现象（实测）**：向白名单 OneDrive 目录导出 docx 的三步复合命令（`DIR=...; cp a b_temp && (trash b; true) && mv b_temp b && ls`）触发提权后被拒，评审理由「escalation request does not include the specific command to be executed, so the action cannot be verified as safe」。用户先在 `ask_user_question` 里选了「写入 OneDrive JC STEM 文件夹」仍被拒；用户**直接文字**「我允许你导出到OneDrive」后才放行。
+- **证据（decisions.jsonl，2026-09-01）**：`esc=true bashDests=[] inTree=false outOfTree=false ... cmdHead="DIR=\"/Users/logan/Library/CloudStorage...`（多次，bashDests 恒为空）；对照组——简单 cp 命令 `bashDests=["/Users/logan/Library/CloudStorage/OneDrive-TheHongKongPolytechnicUniversity/.../x.docx"]` 正确落 `pre-execute-allow (curated allowPath)`。
+- **根因/性质（与 spec line 202/206 对照）**：「复合命令回退 classifier」是**既有设计**（`bashWriteDestinations` 只解析非复合写命令，`&&`/变量/子 shell 不解析）；但今天暴露组合摩擦：① 白名单 allowPath 对复合命令**完全不生效**——`bashDests=[]` → `allowPathTargets` 空 → 不命中 → 连 approval-bridge 都不记录（line 287-290 桥接依赖 allowPathTargets）；② 复合命令 + 提权落入分类器/approval 后，approval 请求 **payload 不带具体命令/路径**（spec line 280「approval/request payload 不 carry args/paths」），评审无法验证安全 → 拒绝 → 用户须额外文字批准。
+- **影响**：用户「把 OneDrive 加入白名单」的信任声明在常见导出场景（temp→trash→mv 三步复合命令）被绕过，需重复人工批准；与 allowPath 白名单「免审批」语义冲突。
+- **修复方向（已实现，2026-09-01，采用 ① + 副作用守卫）**：
+  - **决策**：采用方向 ①（扩展 `bashWriteDestinations` 解析复合命令），并加**副作用命令守卫**，避免「复合命令按设计回退」的安全边界整体失守。不采用 ②（approval payload 带命令 = harness/DSH 本体改动，升级覆盖风险大）；③（桥接复用）依赖解析出的 `allowPathTargets`，① 修复后桥接自然生效，无需单独实现。
+  - **实现（bands.ts）**：新增 `splitShellSegments`（顶层 `&&`/`||`/`;`/`|`/`&`/换行 分段，引号+括号感知，`(trash b; true)` 子 shell 不误切并递归解析）与 `expandShellVars`（捕获 `VAR=...`/`export VAR=...` 纯赋值、`$VAR`/`${VAR}` 展开，种子 `$HOME`）；`bashWriteDestinations` 对复合命令逐段提取写命令目标（`mv A B`/`cp A B` 取 B、tar/unzip -C/-d、curl -o、wget -O、git clone），返回并集。**守卫**：任一段不是「已识别写命令 / 纯赋值 / 良性工具命令（echo、ls、mkdir、test、true、false、printf、pwd、stat、file、wc、head、tail、which、dirname、basename、date、sleep、uname、id、du、df、sort、uniq、cat、trash）」或含顶层重定向 `>`/`>>` → 整体返回 `[]` 回退分类器。副作用命令（kill/pkill/systemctl/launchctl/brew/docker/…）与 `rm`/`sh`/`bash` 等不在良性集 → 复合命令里出现即回退，防「`curl -o /tmp/e && bash /tmp/e`」类下载执行模式被 allowPath 放行。
+  - **命令替换守卫（2026-09-01 双 agent 审查后补，HIGH 修复）**：段内含 **命令/进程替换**（`` `…` ``、`$(…)`、`<(…)`，含引号内形式——双引号内 `$()` 仍执行）→ 整体回退。审查实测：`cp a '<allowRoot>/$(rm -rf ~/.ssh)'` 在修复前会被提取为目标、前缀命中 allowPath → 零评审提权自动放行且 `$(…)` 内命令先执行（allowPath 信任边界击穿，v0.10.1 因 `$`→复合→回退而不受影响，`$()` 是 v0.11.0 新引入；反引号非复合形态是既有洞一并修掉）。`$VAR`/`${VAR}` 字面展开不受影响（那是 Issue B 的功能）。
+  - **trash 搭车说明（审查 MEDIUM 项，维持现状）**：良性工具（`trash`/`mkdir` 等）随白名单快速路径搭车执行，其副作用不再单独过分类器。判断依据：① 删除目标**本身永不进入** allowPathTargets（白名单信任只作用于写目标）；② 单命令 `trash` 本就命中 `DEFAULT_ALLOW` 的 `'trash *'` allow glob 零评审放行（除 deny），复合搭车**不扩大信任面**；③ `rm` 不可恢复、不在良性集、强制回退分类器。移出 `trash` 会破坏导出三步曲（spec 设计场景），故不采纳审查员的移出建议，仅文档化语义（README en/zh 已补）。
+  - **效果**：`DIR=...; cp a b_temp && (trash b; true) && mv b_temp "$DIR/b" && ls` → `bashDests=[b_temp, <OneDrive>/b]` → 全部在信任根内 → `curated allowPath` → 桥接 → 提权零确认放行。用户「白名单 OneDrive 可导出」恢复。
+- **验证（2026-09-01）**：新增单测（三步复合导出 → 目标提取含 `$VAR` 展开；`&& echo done` 良性尾段不阻塞；pkill/rm/bash/cd/重定向 → `[]` 回退；引号内分隔符不误切；非复合路径回归不变）；`npm run build` + `npm test` 通过。
+
+### Issue C：allowPath 白名单不豁免文件沙箱（workspace-write）对 vault 外写入的拦截（2026-09-01 补记，已处理：文档层 ✅ v0.11.0）
+
+> 本节记录 2026-09-01 JC STEM 会话实测：**即使命令命中 allowPath 白名单，DSH 文件沙箱仍拦截 vault 外（OneDrive）写入**——与 Issue B（复合命令未命中白名单）是**两个独立层**的问题。用户质疑「OneDrive 在白名单里为什么不能导出」。2026-09-01 已处理（文档层，见下）。
+
+- **现象（实测，2026-09-01，auto-mode 会话，session 文件策略 workspace-write）**：
+  1. 简单非复合 `cp /tmp/jcstem_export/a_Goals_clean_test.docx "/Users/logan/Library/CloudStorage/OneDrive-个人/Documents/Job/JC STEM 202627/..."` —— 目标在 `config.allowPaths`（个人 OneDrive 根）内，简单 cp 命令 `bashWriteDestinations` 应正确提取目标并命中 `curated allowPath`（2026-08-29 的 E2E 已证简单 cp 落 `pre-execute-allow`）—— 但命令执行仍被拒：`cp: Operation not permitted` + `[sandbox: file access denied under workspace-write mode]` + `[sandbox: escalation available — retry with sandbox_permissions]`；加 `sandbox_permissions=danger-full-access` 重试同一命令才成功复制。
+  2. 同类：`export_docx.py`（python 进程内文件写）向同一 OneDrive 目录写 `refs_fixed.json` → `PermissionError: [Errno 1] Operation not permitted`（python 内部 os 写，同被沙箱拦）。
+- **根因（对照 DSH 层架构）**：**DSH 文件沙箱（session file policy，workspace-write）与 auto-mode 白名单是两个独立层**。`config.allowPaths` 只作用于 auto-mode 插件的 pre-execute 门——让命中路径跳过插件分类器/approval、并触发 `approval-bridge`（0.10.0 起 `allowed-once`）；但**不改变 DSH 文件沙箱对 vault 外路径的写权限**。workspace-write 沙箱只允许写 workspace（vault 根 / 会话工作区），vault 外（OneDrive、`~/.agents` 等）写入一律被沙箱底层拦截（Operation not permitted / PermissionError EPERM / sandbox marker），与命令是否命中 allowPath、是否复合**无关**。要真正写入 OneDrive 必须把沙箱权限提升到 `danger-full-access`。
+- **与既有 issue 的区别（三层各自独立）**：
+  - Bug A（2026-09-01，workspace 相对路径误判）：分类器层，cwd/相对路径解析问题——workspace 内文件被误判 out-of-tree 进分类器。
+  - Issue B（2026-09-01，复合命令使 allowPath 失效）：`bashWriteDestinations` 不解析复合命令 → `allowPathTargets` 空 → 未命中 allowPath → 落入分类器/approval，且 approval payload 无命令 → 拒。
+  - **Issue C（本次）**：allowPath **已命中**（简单 cp / 文件工具），但 **DSH 文件沙箱独立拦截**——白名单永远无法让 vault 外写入通过沙箱，与命令形态无关。
+- **影响**：用户「把 OneDrive 加入 allowPaths」的信任声明**不能**让导出自动成功——文件沙箱仍需每次 `danger-full-access`（提权 → 人工/评审），或永久放宽文件策略；与用户预期「白名单 = 免审批写 OneDrive」冲突（用户两次质疑：2026-08-29 复合命令、2026-09-01 简单 cp）。
+- **修复方向（已处理，2026-09-01，采用 ④+①：维持现状 + 文档明确边界）**：
+  - **决策**：allowPath 只免 auto-mode 评审、不免 DSH 文件沙箱是**层架构事实**（插件改不了沙箱）；「白名单写入免沙箱」需把 `allowPaths` 同步进沙箱 trust roots（harness/补丁层，blast radius 大，属需要用户拍板的安全策略变更，不在本次范围）。插件侧落地：system prompt（`auto-mode:allowlist`）与 README(en/zh) 明确边界——白名单路径写 **workspace 外**仍需 `sandbox_permissions: danger-full-access` 提权，而该提权对白名单路径经 approval 桥接**零评审自动放行**（v0.10.0 语义）——即用户「白名单 = 免审批写 OneDrive」的预期在**带提权**的调用上成立。
+  - **实现（已实现）**：`ALLOWLIST_SENTENCE` 补充边界句；README(en/zh)「Trusting extra directories」补充「allowlist ≠ file-sandbox permission」说明。
+- **验证（2026-09-01）**：提示词句读核对（无歧义）；README 段落核对。
+
+### Issue D：vault 内「未跟踪测试文件」被 auto-mode 误判为 workspace 外 + 意图不相关而拒绝（2026-09-01 补记，已确认根因 = Bug A 变体 ✅ v0.11.0）
+
+- **现象（实测，2026-09-01，auto-mode 会话）**：DSH `edit` 一个 **vault 内**未跟踪测试文件 `workspace/JC-STEM-2026/plan-draft/_mtime_test.txt`（绝对路径 `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Logans-vault/workspace/...`，明确在 session workspace 内），被分类器拒绝，理由：「The action targets a file outside the trusted working directory and there is no evidence it serves the user's current request; modifying an untracked test file outside the workspace is not clearly aligned and could affect external state.」
+- **对照**：同一会话 edit **已 git 跟踪**的 `research-plan-prose-checklist.md`（同在 workspace 内）被正常放行——差异在「是否已跟踪 + 是否与当前请求相关」。
+- **根因（已核对，2026-09-01）**：**根因即 Bug A**（原假设 ① 成立）。`edit` 用的是**相对路径** `workspace/JC-STEM-2026/plan-draft/_mtime_test.txt`（现象行本身即相对路径），被 Bug A 的「进程 cwd 解析相对路径」误判 out-of-tree → 分类器被告知「file operation outside trusted workspace: workspace/JC-STEM-2026/plan-draft/_mtime_test.txt」→ 分类器据此（叠加「test file」的意图推断）判 reject，理由里的「untracked / outside the workspace」是其对**错误输入**的合理推演。Bug A 修复后 in-tree 捷径直接放行、分类器不再介入（对照组的已跟踪文件同样受益）。不需要 ②（分类器 prompt 特判 untracked）或 ③——那是在错误前提上打补丁。
+- **影响**：auto-mode 会话中编辑测试/临时/未跟踪文件会被误拒（即使明确在 workspace 内），拖慢开发测试节奏。
+- **验证（2026-09-01）**：Bug A 单测覆盖相对路径 in-tree（含嵌套子目录路径）；同路径绝对形式本就在-tree（无行为变化）。
+- **版本**：0.10.1 → **0.11.0**（行为变更：复合 bash 写命令 allowPath 生效 + workspace 相对路径 in-tree 判定修复 + allowlist 语义边界文档化）。
+- **双 agent 审查（2026-09-01，commit 7f409aa 之后）**：安全审查 + 一致性审查并行复核。一致性：可发布、无回归（57 测试全绿、lib 与 src 严格同步、旧断言全部保留）。安全审查：发现 1 高（`$()` 命令替换走私击穿 allowPath 信任边界）1 中（trash 搭车）1 低（管道左侧不独立校验）；另验证 `isInsideTrusted` base 修复、`..` 逃逸、symlink、mv/cp 跨根移动、重定向守卫、子 shell 递归、deny 顺序、parseAssignment、expandShellVars、bridge 关联均正确。处置：HIGH 已修（命令替换守卫，见上）；trash 维持现状 + 文档化（见上）；管道低项为既有语义不改。修复后新增回归测试 6 条（`$(`/反引号/`<(`/引号内 `$()`/`D="$(pwd)"` 回退 + `$VAR` 展开仍工作 + trash/mkdir 搭车语义锁定）。
+- **E2E 复测（待重启后）**：运行中的 dsh 进程需重启后加载新 `lib/` 生效；重启后 auto-mode 会话复测——① `edit _internal/log.md`（相对路径）应落 `pre-execute-allow (in-tree / allowPath file op)` 不再进分类器；② 三步复合导出命令应落 `curated allowPath` + `approval-bridge` + `allowed-once` 无 `rejected`；③ `rm`/命令替换复合命令仍回退分类器。
+
 
 
