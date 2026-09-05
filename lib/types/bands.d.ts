@@ -12,6 +12,9 @@
  *
  * Ported from dsh-auto-mode v0.4.1 lib/index.js (decideRoute + helpers).
  */
+/** Expand `~` and `${HOME}`/`$HOME` at the front of a path (for `cd ~` and `git -C ~`).
+ * Left as-is when `HOME` is empty. */
+export declare function expandHome(p: string): string;
 /** Compile a rule string into a case-insensitive RegExp. */
 export declare function compileRegex(rule: string): RegExp;
 /** Whether `haystack` matches any regex in the list. Returns the first hit. */
@@ -33,11 +36,15 @@ export declare function tokenizeShell(cmd: string): string[];
  * For a bash command, return the destination path(s) it writes into, or `[]`
  * when the command is not a recognized file-writing command, has no explicit
  * destination, or is a composite whose segments contain anything outside the
- * write / assignment / benign-utility set (those fall back to the classifier —
- * 2026-09-01 Issue B). The destination is only ever the *target* of the
- * write; sources and unrelated path tokens are ignored.
+ * write / assignment / benign-utility / `cd` set (those fall back to the
+ * classifier — 2026-09-01 Issue B). The destination is only ever the *target*
+ * of the write; sources and unrelated path tokens are ignored.
+ *
+ * `cwd` is the working directory the command runs in (session cwd) — used to
+ * resolve a bare `git add/commit/push` repository root and as the base for a
+ * relative `cd`. Defaults to the host process cwd.
  */
-export declare function bashWriteDestinations(cmd: string): string[];
+export declare function bashWriteDestinations(cmd: string, cwd?: string): string[];
 /** Whether `text` contains a permanent-deletion command. */
 export declare function matchDeletion(text: string): string | null;
 /** Whether `text` is a read-only tool name. */

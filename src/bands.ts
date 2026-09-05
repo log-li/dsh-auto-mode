@@ -13,6 +13,15 @@
  * Ported from dsh-auto-mode v0.4.1 lib/index.js (decideRoute + helpers).
  */
 
+import { resolve } from 'node:path';
+
+/** Expand `~` and `${HOME}`/`$HOME` at the front of a path (for `cd ~` and `git -C ~`).
+ * Left as-is when `HOME` is empty. */
+export function expandHome(p: string): string {
+  const home = process.env.HOME ?? '';
+  return p.replace(/^~(?=$|\/)/, home).replace(/\$\{HOME\}|\$HOME/g, home);
+}
+
 /** Compile a rule string into a case-insensitive RegExp. */
 export function compileRegex(rule: string): RegExp {
   return new RegExp(rule, 'i');
@@ -145,7 +154,9 @@ const BENIGN_UTILITY_COMMANDS = new Set([
  * Split a composite shell command into top-level segments on `;`, `&&`, `||`,
  * `|`, `&` and newlines — quote- and paren-aware, so a separator inside quotes
  * or inside a `(...)` / `$(...)` group is literal (`(trash b; true)` is ONE
- * segment).
+ * segment). An `&` that is an fd-dup redirection (e.g. `2>&1`, `>&2`, `>&-`) is
+ * NOT a command separator — `git push … 2>&1 | tail` stays ONE segment up to
+ * the pipe (2026-09-04 git allowPath bug).
  */
 function splitShellSegments(cmd: string): string[] {
   const segments: string[] = [];
@@ -175,6 +186,12 @@ function splitShellSegments(cmd: string): string[] {
       continue;
     }
     if (paren === 0 && (ch === ';' || ch === '\n' || ch === '|' || ch === '&')) {
+      // `2>&1` / `>&2` / `>&-` : the `&` is part of a descriptor-dup redirection,
+      // not a command separator — keep it in the current segment.
+      if (ch === '&' && cur.endsWith('>')) {
+        cur += ch;
+        continue;
+      }
       if (cur.trim()) segments.push(cur.trim());
       cur = '';
       continue;
@@ -215,10 +232,14 @@ function expandShellVars(text: string, vars: ReadonlyMap<string, string>): strin
   });
 }
 
-/** Whether a segment contains an unquoted redirection (`>` / `>>`). */
+/** Whether a segment contains an unquoted redirection that writes a FILE
+ * (`>`, `>>`, `2>`, `2>>`). A descriptor-dup redirection (`2>&1`, `>&2`,
+ * `>&-`, `2>&-`) only re-targets a file descriptor and is NOT a file write, so
+ * it does not invalidate the allowPath fast path (2026-09-04 git bug). */
 function hasUnquotedRedirect(seg: string): boolean {
   let quote: string | null = null;
-  for (const ch of seg) {
+  for (let i = 0; i < seg.length; i++) {
+    const ch = seg[i] ?? '';
     if (quote) {
       if (ch === quote) quote = null;
       continue;
@@ -227,13 +248,24 @@ function hasUnquotedRedirect(seg: string): boolean {
       quote = ch;
       continue;
     }
-    if (ch === '>') return true;
+    if (ch === '>') {
+      let j = i + 1;
+      if (seg[j] === '>') j++; // `>>` append
+      if (seg[j] === '&') { // fd-dup (`>&` / `2>&`) — not a file write
+        i = j;
+        continue;
+      }
+      return true; // `>file` / `>>file` / `2>file` — a file redirect
+    }
   }
   return false;
 }
 
-/** Destination(s) one write-command argv writes into (see the switch below). */
-function destinationsOf(base: string, argv: string[]): string[] {
+/** Destination(s) one write-command argv writes into (see the switch below).
+ * `cwd` is the effective working directory a command runs in — for `git`
+ * write-commands (`add`/`commit`/`push`) the writable "destination" is the
+ * repository root, resolved from an explicit `-C <dir>` else from `cwd`. */
+function destinationsOf(base: string, argv: string[], cwd: string): string[] {
   switch (base) {
     case 'cp':
     case 'mv':
@@ -283,11 +315,32 @@ function destinationsOf(base: string, argv: string[]): string[] {
       return [];
     }
     case 'git': {
-      if (argv[0] === 'clone') {
+      // Resolve the repository root from an explicit `git -C <dir>` (repeatable,
+      // last wins), else the effective working directory.
+      let repo = cwd;
+      for (let i = 0; i < argv.length; i++) {
+        const a = argv[i] ?? '';
+        if (a === '-C' && argv[i + 1]) {
+          repo = argv[i + 1] as string;
+          i++;
+        } else if (a.startsWith('-C') && a.length > 2) {
+          repo = a.slice(2);
+        }
+      }
+      // First recognized subcommand — flags and their values are skipped so
+      // `git -C /dir add .` is still seen as `add`.
+      const sub = argv.find((a) => ['clone', 'add', 'commit', 'push'].includes(a)) ?? '';
+      if (sub === 'clone') {
         // git clone <url> [dir] — the destination is the last arg when it is a
         // local path, not the repository URL (clone without a dir writes into cwd).
         const last = argv[argv.length - 1];
         if (last && !last.startsWith('-') && !/^(?:https?|git|ssh):\/\/|git@/.test(last)) return [last];
+      } else if (sub === 'add' || sub === 'commit' || sub === 'push') {
+        // add/commit/push write into the repo's `.git`, so the allowPath-checkable
+        // destination is the repository root. (Deletion / history-rewrite commands
+        // — `clean`, `reset --hard`, `rebase`, `merge` — are deliberately NOT here;
+        // they stay in the classifier / hard-deny band.)
+        if (repo) return [resolve(cwd, expandHome(repo))];
       }
       return [];
     }
@@ -298,14 +351,18 @@ function destinationsOf(base: string, argv: string[]): string[] {
 
 /**
  * Walk command segments, extracting write destinations into `dests` and
- * capturing `VAR=…` assignments into `vars`. Returns false when any segment is
- * not a recognized write command, a pure assignment, or a benign utility —
- * the caller then falls back to the classifier for the WHOLE command.
+ * capturing `VAR=…` assignments into `vars`. Tracks the effective working
+ * directory in `cwd` (a mutable ref) so `cd <dir>` updates it and a following
+ * `git add/commit/push` resolves its repository root against it. Returns false
+ * when any segment is not a recognized write command, a pure assignment, a
+ * benign utility, a `cd`, or a subshell group — the caller then falls back to
+ * the classifier for the WHOLE command.
  */
 function collectSegmentDestinations(
   cmd: string,
   vars: Map<string, string>,
   dests: string[],
+  cwd: { value: string },
 ): boolean {
   const segments = isCompositeShell(cmd) ? splitShellSegments(cmd) : [cmd.trim()];
   for (const rawSeg of segments) {
@@ -313,7 +370,7 @@ function collectSegmentDestinations(
     if (!seg) continue;
     // Subshell group `(…; …)` — recurse (carries the same variable map).
     if (seg.startsWith('(') && seg.endsWith(')')) {
-      if (!collectSegmentDestinations(seg.slice(1, -1), vars, dests)) return false;
+      if (!collectSegmentDestinations(seg.slice(1, -1), vars, dests, cwd)) return false;
       continue;
     }
     // Command substitution / process substitution (`…`, $(…), <(…)) executes
@@ -331,6 +388,23 @@ function collectSegmentDestinations(
       vars.set(assign[0], assign[1]);
       continue;
     }
+    // `cd <dir>` (or bare `cd` → HOME): pure navigation. Updates the effective
+    // cwd so a later `git add/commit/push` resolves its repo root against it.
+    // `cd -` (to $OLDPWD) is unpredictable — fail back to the classifier.
+    const cdMatch = /^cd(?:\s+(.*))?$/.exec(seg);
+    if (cdMatch) {
+      const target = (cdMatch[1] ?? '').trim();
+      if (target === '-') return false;
+      if (target) {
+        const ttokens = tokenizeShell(expandShellVars(target, vars));
+        const dir = ttokens[0] ?? '';
+        if (dir === '-' || dir === '') return false;
+        cwd.value = resolve(cwd.value, expandHome(dir));
+      } else {
+        cwd.value = expandHome('~');
+      }
+      continue;
+    }
     // Redirection writes to a file we do not model — never allowPath-trust it.
     if (hasUnquotedRedirect(seg)) return false;
     const tokens = tokenizeShell(seg);
@@ -342,7 +416,7 @@ function collectSegmentDestinations(
       if (BENIGN_UTILITY_COMMANDS.has(base)) continue; // benign — no destination
       return false; // side-effect / unknown command → whole composite falls back
     }
-    dests.push(...destinationsOf(base, expanded.slice(1)));
+    dests.push(...destinationsOf(base, expanded.slice(1), cwd.value));
   }
   return true;
 }
@@ -351,15 +425,20 @@ function collectSegmentDestinations(
  * For a bash command, return the destination path(s) it writes into, or `[]`
  * when the command is not a recognized file-writing command, has no explicit
  * destination, or is a composite whose segments contain anything outside the
- * write / assignment / benign-utility set (those fall back to the classifier —
- * 2026-09-01 Issue B). The destination is only ever the *target* of the
- * write; sources and unrelated path tokens are ignored.
+ * write / assignment / benign-utility / `cd` set (those fall back to the
+ * classifier — 2026-09-01 Issue B). The destination is only ever the *target*
+ * of the write; sources and unrelated path tokens are ignored.
+ *
+ * `cwd` is the working directory the command runs in (session cwd) — used to
+ * resolve a bare `git add/commit/push` repository root and as the base for a
+ * relative `cd`. Defaults to the host process cwd.
  */
-export function bashWriteDestinations(cmd: string): string[] {
+export function bashWriteDestinations(cmd: string, cwd?: string): string[] {
   if (!cmd) return [];
   const vars = new Map<string, string>([['HOME', process.env.HOME ?? '']]);
   const dests: string[] = [];
-  if (!collectSegmentDestinations(cmd, vars, dests)) return [];
+  const cwdState: { value: string } = { value: cwd || process.cwd() };
+  if (!collectSegmentDestinations(cmd, vars, dests, cwdState)) return [];
   return [...new Set(dests)];
 }
 

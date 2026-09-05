@@ -150,9 +150,9 @@ pre-execute 门拦截**所有**工具调用（包括工作区沙箱内、本来�
       - /Users/<you>/Library/CloudStorage/OneDrive-<tenant>/Projects/<proj>/Proposal/
 ```
 
-只有被识别的写命令才会被信任（删除类命令 `rm`/`trash` 绝不会被白名单放行）；路径在 symlink 解析后匹配，`/Users/<you>/OneDrive - …` 软链与真实 `Library/CloudStorage/…` 路径都可用。下面的裁决缓存修复仍然重要：即便没有 allowPath，你一旦显式授权某个动作，分类器也会带着你的意图重跑，而不是回放旧的缓存拒绝。
+只有被识别的写命令才会被信任（删除类命令 `rm`/`trash` 绝不会被白名单放行）；路径在 symlink 解析后匹配，`/Users/<you>/OneDrive - …` 软链与真实 `Library/CloudStorage/…` 路径都可用。白名单目录内的 `git add`/`commit`/`push` 会把**仓库根**解析为写目标，因此对位于 allowPath 下的仓库做提交/推送也会跳过分类器（v0.11.1）。下面的裁决缓存修复仍然重要：即便没有 allowPath，你一旦显式授权某个动作，分类器也会带着你的意图重跑，而不是回放旧的缓存拒绝。
 
-**复合写命令（v0.11.0）**。临时文件→替换的导出三步曲（如 `DIR=…; cp a b_tmp && (trash b; true) && mv b_tmp "$DIR/b"`）现在会按段解析（含 `VAR=…` 赋值跟踪与 `$VAR` 展开），其目标仍能命中 `allowPaths`。快速路径仍有守卫：复合命令若含副作用命令（`kill`、`pkill`、`rm`、`sh`、`bash`、网络/守护进程管理等）、命令替换（`` `…` ``、`$(…)`、`<(…)`）、重定向（`>`）或写/良性集之外的任何命令，一律回退分类器，与之前行为一致。复合内的良性工具（`trash`、`mkdir`、`echo` 等）随白名单快速路径搭车执行——一旦所有写目标都在白名单内，其副作用不再单独过分类器（删除目标本身永不进入白名单信任判定，`rm` 仍强制回退分类器）。
+**复合写命令（v0.11.0）**。临时文件→替换的导出三步曲（如 `DIR=…; cp a b_tmp && (trash b; true) && mv b_tmp "$DIR/b"`）现在会按段解析（含 `VAR=…` 赋值跟踪与 `$VAR` 展开），其目标仍能命中 `allowPaths`。`cd <dir>` 是受跟踪的良性导航命令——它更新有效工作目录（使后面的 `git add/commit/push` 据此解析仓库根），且不使快速路径失效（`cd -` 仍不可预测，回退分类器）。快速路径仍有守卫：复合命令若含副作用命令（`kill`、`pkill`、`rm`、`sh`、`bash`、网络/守护进程管理等）、命令替换（`` `…` ``、`$(…)`、`<(…)`）、文件重定向（`>file`、`>>file`、`2>file`）或写/良性集之外的任何命令，一律回退分类器，与之前行为一致。**fd-dup 重定向**（`2>&1`、`>&2`、`>&-`）不是文件写入，不使快速路径失效——所以 `git push … 2>&1 | tail` 仍可被白名单判定。复合内的良性工具（`trash`、`mkdir`、`echo` 等）随白名单快速路径搭车执行——一旦所有写目标都在白名单内，其副作用不再单独过分类器（删除目标本身永不进入白名单信任判定，`rm` 仍强制回退分类器）。改写历史的 git 命令（`reset --hard`、`clean`、`rebase`、`merge`）**刻意不**进入白名单信任。
 
 **零确认提权（v0.10.0）**。allowlist 路径意味着**全信任**：请求放宽沙箱（`sandbox_permissions: danger-full-access`）进入 allowlist 路径的调用现在**无需任何确认、不经分类器直接放行**——pre-execute 门已确定性证明所有目标都在 `allowPath` 内，该结论通过调用的 `callId` 传给 approval answerer（审计日志呈现 `curated allowPath` → `approval-bridge` → `decision allowed-once`）。deny 频带仍最先执行（`~/.ssh/` 等 deny 路径即便在 allowPath 内也硬拒），熔断器也不会被绕过——跳闸期间 allowlist 调用仍走人工。
 

@@ -433,8 +433,37 @@ test('side-effect / interpreter / unknown commands invalidate the composite fast
   assert.deepEqual(bashWriteDestinations('pkill -f node && cp a /tmp/b'), []);
   assert.deepEqual(bashWriteDestinations('rm x && cp a /tmp/b'), []);
   assert.deepEqual(bashWriteDestinations('curl -o /tmp/e https://x/e && bash /tmp/e'), []);
-  assert.deepEqual(bashWriteDestinations('cp a /tmp/b && cd /tmp'), []);
+  assert.deepEqual(bashWriteDestinations('cp a /tmp/b && cd -'), []); // `cd -` ($OLDPWD) is unpredictable
   assert.deepEqual(bashWriteDestinations('cp a /tmp/b && (rm -rf x)'), []);
+});
+test('cd is a tracked benign navigator (not an invalidator), plus git write-resolution', () => {
+  // `cd <dir>` rides along and updates the effective cwd; `cd -` still fails closed.
+  assert.deepEqual(bashWriteDestinations('cp a /tmp/b && cd /tmp'), ['/tmp/b']);
+  // git add/commit/push write into the repo's `.git`, so the allowPath-checkable
+  // destination is the repository root resolved from the `cd` (or `-C`) context.
+  assert.deepEqual(
+    bashWriteDestinations('cd /Users/logan/.agents && git add skills/a.md && git commit -m "m"'),
+    ['/Users/logan/.agents'],
+  );
+  assert.deepEqual(
+    bashWriteDestinations('cd /Users/logan/.agents && git add -A && git commit -q -m "x"'),
+    ['/Users/logan/.agents'],
+  );
+  assert.deepEqual(
+    bashWriteDestinations('cd /Users/logan/.agents && git push origin main 2>&1 | tail -3'),
+    ['/Users/logan/.agents'],
+  );
+  assert.deepEqual(bashWriteDestinations('git -C /Users/logan/.agents add .'), ['/Users/logan/.agents']);
+  assert.deepEqual(bashWriteDestinations('git add .', '/Users/logan/.agents'), ['/Users/logan/.agents']);
+  // `-C ~/…` normalizes `~` to the absolute repo root (HOME expansion).
+  assert.deepEqual(
+    bashWriteDestinations('git -C ~/.agents add .'),
+    [join(process.env.HOME, '.agents')],
+  );
+  // history-rewrite / deletion git commands are NOT allowPath-trusted.
+  assert.deepEqual(bashWriteDestinations('git reset --hard HEAD'), []);
+  assert.deepEqual(bashWriteDestinations('cd /Users/logan/.agents && git clean -f'), []);
+  assert.deepEqual(bashWriteDestinations('cd /Users/logan/.agents && rm -rf x'), []);
 });
 test('redirection in any segment invalidates the composite fast path', () => {
   assert.deepEqual(bashWriteDestinations('cp a /tmp/b && echo hi >> /tmp/log'), []);

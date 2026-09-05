@@ -287,7 +287,7 @@ export function registerPreExecute(
       const isOutOfTreeFileOp = isFileToolCall && targetPaths.length > 0 && !inTrusted;
       // Bash write-commands (cp/mv/rsync/...) expose their destination; feed it to
       // the curated allowPath check so exporting into a trusted dir is trusted.
-      const bashTargets = isFileToolCall ? [] : bashWriteDestinations(commandText);
+      const bashTargets = isFileToolCall ? [] : bashWriteDestinations(commandText, session.header?.cwd);
       // Diagnose why a file/bash op is (or isn't) classified: record the gate state.
       if (isFileToolCall || (commandText && isEscalation)) {
         const argsKeys = exec.arguments && typeof exec.arguments === 'object'
